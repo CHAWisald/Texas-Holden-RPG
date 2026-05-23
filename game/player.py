@@ -1,3 +1,5 @@
+import random
+
 from .hand_evaluator import HandEvaluator
 
 
@@ -6,7 +8,7 @@ class Player:
         self.name = name
         self.chips = chips
         self.hole_cards = []
-        self.street_bet = 0   # chips put in this betting street
+        self.street_bet = 0
         self.folded = False
         self.all_in = False
 
@@ -22,12 +24,21 @@ class Player:
     def get_action(self, current_bet, to_call, min_raise, pot, community_cards):
         raise NotImplementedError
 
+    def decide_to_cheat(self, deck) -> tuple:
+        """Return (will_cheat: bool, chosen_hand: str|None)."""
+        return False, None
+
+    def decide_to_accuse(self, elapsed: float, big_blind: int) -> bool:
+        return False
+
 
 class HumanPlayer(Player):
     def is_human(self) -> bool:
         return True
 
     def get_action(self, current_bet, to_call, min_raise, pot, community_cards):
+        from .cheat_system import timed_input
+
         print(f"\n  ── Your Turn ─────────────────────────")
         print(f"  Chips: {self.chips}  |  Pot: {pot}")
         if community_cards:
@@ -35,68 +46,92 @@ class HumanPlayer(Player):
         print(f"  Hand  : {' '.join(str(c) for c in self.hole_cards)}")
 
         can_check = to_call == 0
+        auto = 'c' if can_check else 'f'
+
         if can_check:
-            print(f"  Actions: check (c)  |  bet/raise <amount> (r <n>)  |  fold (f)")
+            print(f"  Actions: check (c)  |  raise <n> (r <n>)  |  fold (f)  [30s]")
         else:
-            remaining_after_call = self.chips - to_call
             print(f"  To call: {min(to_call, self.chips)}")
-            print(f"  Actions: call (c)  |  raise <amount> (r <n>)  |  all-in (a)  |  fold (f)")
+            print(f"  Actions: call (c)  |  raise <n> (r <n>)  |  all-in (a)  |  fold (f)  [30s]")
 
-        while True:
-            try:
-                raw = input("  > ").strip().lower()
-            except (EOFError, KeyboardInterrupt):
-                return ('fold', 0)
+        raw = timed_input("  > ", timeout=30.0, default=auto)
+        if not raw:
+            raw = auto
 
-            if not raw:
-                continue
+        parts = raw.strip().lower().split()
+        cmd   = parts[0] if parts else auto
 
-            parts = raw.split()
-            cmd = parts[0]
+        if cmd in ('f', 'fold'):
+            return ('fold', 0)
 
-            if cmd in ('f', 'fold'):
-                return ('fold', 0)
+        if cmd in ('c', 'call', 'check'):
+            return ('check', 0) if can_check else ('call', to_call)
 
-            if cmd in ('c', 'call', 'check'):
-                if can_check:
-                    return ('check', 0)
-                return ('call', to_call)
+        if cmd in ('a', 'allin', 'all-in', 'all_in'):
+            return ('all-in', self.chips)
 
-            if cmd in ('a', 'allin', 'all-in', 'all_in'):
-                return ('all-in', self.chips)
-
-            if cmd in ('r', 'raise', 'bet'):
-                if len(parts) < 2:
-                    print(f"  Specify amount. Min raise size: {min_raise}")
-                    continue
+        if cmd in ('r', 'raise', 'bet'):
+            if len(parts) >= 2:
                 try:
                     amount = int(parts[1])
+                    if amount < min_raise and to_call + amount < self.chips:
+                        print(f"  Min raise is {min_raise}, using that.")
+                        amount = min_raise
+                    return ('raise', amount)
                 except ValueError:
-                    print("  Invalid amount.")
-                    continue
-                total_needed = to_call + amount
-                if amount < min_raise and total_needed < self.chips:
-                    print(f"  Minimum raise size is {min_raise}.")
-                    continue
-                return ('raise', amount)
+                    pass
+            print(f"  No valid amount — raising minimum ({min_raise}).")
+            return ('raise', min_raise)
 
-            print("  Unknown command. Try: c (check/call), r <n> (raise), a (all-in), f (fold)")
+        print(f"  Unrecognised — defaulting to {'check' if can_check else 'fold'}.")
+        return ('check', 0) if can_check else ('fold', 0)
+
+    def decide_to_cheat(self, deck) -> tuple:
+        from .cheat_system import timed_input, CHEAT_HAND_OPTIONS, CHEAT_HAND_LABELS
+
+        print("\n  You are the Dealer! (secret decision — others only see shuffle time)")
+        raw = timed_input(
+            "  [H]onest shuffle or [C]heat? [30s]: ",
+            timeout=30.0, default='h'
+        )
+
+        if raw.lower().startswith('c'):
+            print("  Pick your hand:")
+            for i, h in enumerate(CHEAT_HAND_OPTIONS, 1):
+                print(f"    {i}. {h}  ({CHEAT_HAND_LABELS[h]})")
+            pick = timed_input("  Choice [1-5, 10s]: ", timeout=10.0, default='1')
+            try:
+                idx = max(0, min(int(pick) - 1, len(CHEAT_HAND_OPTIONS) - 1))
+            except ValueError:
+                idx = 0
+            chosen = CHEAT_HAND_OPTIONS[idx]
+            print(f"  Dealing yourself: {chosen}  ({CHEAT_HAND_LABELS[chosen]})")
+            return True, chosen
+
+        return False, None
+
+    def decide_to_accuse(self, elapsed: float, big_blind: int) -> bool:
+        from .cheat_system import timed_input
+
+        ans = timed_input(
+            f"  Accuse the dealer? (costs {2 * big_blind} chips) [y/n, 15s]: ",
+            timeout=15.0, default='n'
+        )
+        return ans.lower().startswith('y')
 
 
 class BotPlayer(Player):
     def __init__(self, name: str, chips: int = 1000, aggression: float = 0.5):
         super().__init__(name, chips)
-        self.aggression = aggression  # 0.0 (tight/passive) to 1.0 (loose/aggressive)
+        self.aggression = aggression
 
     def get_action(self, current_bet, to_call, min_raise, pot, community_cards):
         strength = self._hand_strength(community_cards)
 
-        # Simple pot-odds check
         pot_odds = to_call / (pot + to_call) if to_call > 0 and pot > 0 else 0.0
 
         raise_thresh = 0.65 - self.aggression * 0.15
         call_thresh  = 0.35 - self.aggression * 0.10
-        fold_thresh  = 0.20 - self.aggression * 0.08
 
         if strength >= raise_thresh and self.chips > to_call + min_raise:
             raise_size = max(min_raise, int(pot * 0.6 * strength))
@@ -115,6 +150,23 @@ class BotPlayer(Player):
             return ('check', 0)
 
         return ('fold', 0)
+
+    def decide_to_cheat(self, deck) -> tuple:
+        if random.random() < self.aggression * 0.25:
+            chosen = random.choice(['AA', 'KK', 'QQ', 'AKs', 'AKo'])
+            return True, chosen
+        return False, None
+
+    def decide_to_accuse(self, elapsed: float, big_blind: int) -> bool:
+        if self.chips < 2 * big_blind:
+            return False
+        if elapsed >= 15.0:
+            prob = 0.70
+        elif elapsed >= 12.5:
+            prob = 0.20
+        else:
+            prob = 0.04
+        return random.random() < prob
 
     def _hand_strength(self, community_cards) -> float:
         all_cards = self.hole_cards + community_cards
@@ -137,7 +189,6 @@ class BotPlayer(Player):
             'Straight Flush': 0.98, 'Royal Flush': 1.00,
         }[hand_name]
 
-        # Small bonus for high kickers within the same hand tier
         kicker_bonus = (score[1][0] / 14.0) * 0.04 if score[1] else 0.0
         return min(1.0, base + kicker_bonus)
 
@@ -150,14 +201,11 @@ class BotPlayer(Player):
         suited = self.hole_cards[0].suit == self.hole_cards[1].suit
 
         if r1 == r2:
-            return 0.50 + (r1 - 2) / 12.0 * 0.45  # 22→0.50, AA→0.95
+            return 0.50 + (r1 - 2) / 12.0 * 0.45
 
-        high_s = (high - 2) / 12.0
-        low_s  = (low  - 2) / 12.0
-        gap    = high - low
-
-        base = high_s * 0.55 + low_s * 0.25
-        if suited:  base += 0.05
+        base = (high - 2) / 12.0 * 0.55 + (low - 2) / 12.0 * 0.25
+        gap = high - low
+        if suited:   base += 0.05
         if gap == 1: base += 0.04
         elif gap == 2: base += 0.02
 

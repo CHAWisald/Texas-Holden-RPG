@@ -1,5 +1,6 @@
 from collections import deque
 from .card import Deck
+from .cheat_system import CheatSystem
 from .hand_evaluator import HandEvaluator
 
 class TexasHoldem:
@@ -11,6 +12,7 @@ class TexasHoldem:
         self.deck = Deck()
         self.community_cards = []
         self.pot = 0
+        self.cheat_system = CheatSystem(big_blind)
 
     # ── Public entry point ────────────────────────────────────────────────────
 
@@ -91,13 +93,30 @@ class TexasHoldem:
         self._place_bet(bb_player, self.big_blind)
         print(f"  Blinds posted. Pot: {self.pot}")
 
-        # Deal hole cards
+        # ── Shuffle / cheat phase ─────────────────────────────────────────────
+        cheated, elapsed, chosen_hand = self.cheat_system.shuffle_phase(dealer, self.deck)
+        accusers = self.cheat_system.accusation_phase(active, dealer, elapsed)
+        caught   = self.cheat_system.resolve(accusers, dealer, cheated)
+
+        if caught:
+            dealer.folded = True
+            print(f"  {dealer.name} is ejected from this hand!")
+            if len([p for p in active if not p.folded]) <= 1:
+                self._end_hand(active)
+                return
+
+        # Deal hole cards (dealer gets the cheated hand if uncaught)
         for p in active:
-            p.hole_cards = self.deck.deal(2)
+            if p.folded:
+                continue
+            if cheated and not caught and p is dealer:
+                p.hole_cards = self.cheat_system.deal_cheat_hand(chosen_hand, self.deck)
+            else:
+                p.hole_cards = self.deck.deal(2)
 
         # Show human player their hole cards
         for p in active:
-            if p.is_human():
+            if p.is_human() and not p.folded:
                 print(f"\n  Your hole cards: {' '.join(str(c) for c in p.hole_cards)}")
 
         # ── Pre-flop ──────────────────────────────────────────────────────────
