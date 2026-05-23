@@ -14,9 +14,14 @@ CHEAT_HAND_LABELS = {
     'AKo': 'Ace-King offsuit',
 }
 
-# Shuffle durations shown to players (seconds)
-HONEST_RANGE = (10.0, 14.9)
+# Shuffle durations shown to players (seconds) — ranges intentionally overlap
+HONEST_RANGE = (12.5, 17.5)
 CHEAT_RANGE  = (15.0, 20.0)
+
+# Gaussian centres and shared std-dev for each distribution
+HONEST_MEAN  = 15.0
+CHEAT_MEAN   = 17.5
+SHUFFLE_STD  = 1.5           # creates a realistic spread; overlap zone ≈ 15–17.5 s
 
 # Real wall-clock scale so waits aren't painfully long
 REAL_TIME_SCALE = 0.35
@@ -57,10 +62,9 @@ class CheatSystem:
         print(f"\n  ── Shuffle Phase (Dealer: {dealer.name}) ──")
         cheated, chosen_hand = dealer.decide_to_cheat(deck)
 
-        elapsed = (
-            random.uniform(*CHEAT_RANGE)  if cheated
-            else random.uniform(*HONEST_RANGE)
-        )
+        lo, hi = CHEAT_RANGE if cheated else HONEST_RANGE
+        mean   = CHEAT_MEAN  if cheated else HONEST_MEAN
+        elapsed = max(lo, min(hi, random.gauss(mean, SHUFFLE_STD)))
         self._animate(dealer.name, elapsed * REAL_TIME_SCALE)
         print(f"\r  {dealer.name} finished shuffling in {elapsed:.1f}s.{' ' * 12}")
 
@@ -87,6 +91,7 @@ class CheatSystem:
                 p.chips -= self.cost
                 accusers.append(p)
                 print(f"  {p.name} calls the prosecutor!  (-{self.cost} chips)")
+                break       # only the first player to call may prosecute
             elif not p.is_human():
                 print(f"  {p.name} says nothing.")
 
@@ -96,28 +101,28 @@ class CheatSystem:
 
     def resolve(self, accusers, dealer, cheated) -> bool:
         """
-        Transfer chips between accusers and dealer.
-        Returns True if the dealer was caught and must be force-folded.
+        Transfer chips between the single accuser and dealer.
+        Returns True if the dealer was caught (caller must re-deal fairly).
         """
         if not accusers:
             return False
 
+        acc = accusers[0]
+
         if cheated:
             print(f"\n  [Prosecutor] CHEATING CONFIRMED — {dealer.name} rigged the deck!")
-            for acc in accusers:
-                penalty = min(self.cost, dealer.chips)
-                dealer.chips -= penalty
-                # accuser gets their fee back plus the penalty taken from dealer
-                acc.chips += self.cost + penalty
-                print(f"  {acc.name} gets back {self.cost} + takes {penalty} "
-                      f"from {dealer.name}. (dealer: {dealer.chips})")
+            penalty = min(self.cost, dealer.chips)
+            dealer.chips -= penalty
+            acc.chips += self.cost + penalty    # fee refunded + penalty from dealer
+            print(f"  {acc.name} gets back {self.cost} + takes {penalty} "
+                  f"from {dealer.name}.  (dealer: {dealer.chips})")
+            print(f"  Prosecutor re-shuffles and deals a fair hand to everyone.")
             return True
         else:
-            print(f"\n  [Prosecutor] NOT CHEATING — false accusation(s).")
-            for acc in accusers:
-                dealer.chips += self.cost
-                print(f"  {dealer.name} collects {self.cost} from {acc.name}. "
-                      f"(dealer: {dealer.chips})")
+            print(f"\n  [Prosecutor] NOT CHEATING — false accusation.")
+            dealer.chips += self.cost
+            print(f"  {dealer.name} collects {self.cost} from {acc.name}.  "
+                  f"(dealer: {dealer.chips})")
             return False
 
     # ── Deal the chosen hand from the deck ────────────────────────────────────

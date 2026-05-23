@@ -99,25 +99,23 @@ class TexasHoldem:
         caught   = self.cheat_system.resolve(accusers, dealer, cheated)
 
         if caught:
-            dealer.folded = True
-            print(f"  {dealer.name} is ejected from this hand!")
-            if len([p for p in active if not p.folded]) <= 1:
-                self._end_hand(active)
-                return
-
-        # Deal hole cards (dealer gets the cheated hand if uncaught)
-        for p in active:
-            if p.folded:
-                continue
-            if cheated and not caught and p is dealer:
-                p.hole_cards = self.cheat_system.deal_cheat_hand(chosen_hand, self.deck)
-            else:
+            # Prosecutor re-shuffles; everyone gets a fair random hand
+            self.deck.reset()
+            for p in active:
                 p.hole_cards = self.deck.deal(2)
+        else:
+            # Deal normally; dealer gets the chosen cheat hand if uncaught
+            for p in active:
+                if cheated and p is dealer:
+                    p.hole_cards = self.cheat_system.deal_cheat_hand(chosen_hand, self.deck)
+                else:
+                    p.hole_cards = self.deck.deal(2)
 
         # Show human player their hole cards
         for p in active:
-            if p.is_human() and not p.folded:
-                print(f"\n  Your hole cards: {' '.join(str(c) for c in p.hole_cards)}")
+            if p.is_human():
+                label = "Your new hole cards" if caught else "Your hole cards"
+                print(f"\n  {label}: {' '.join(str(c) for c in p.hole_cards)}")
 
         # ── Pre-flop ──────────────────────────────────────────────────────────
         print("\n  ── Pre-flop ──")

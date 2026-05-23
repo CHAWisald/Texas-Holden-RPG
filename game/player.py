@@ -160,12 +160,17 @@ class BotPlayer(Player):
     def decide_to_accuse(self, elapsed: float, big_blind: int) -> bool:
         if self.chips < 2 * big_blind:
             return False
-        if elapsed >= 15.0:
-            prob = 0.70
-        elif elapsed >= 12.5:
-            prob = 0.20
+        # Honest range 12.5–17.5s, cheat range 15–20s — overlap is 15–17.5s
+        if elapsed > 17.5:
+            prob = 0.80     # outside honest range entirely
+        elif elapsed > 17.0:
+            prob = 0.60     # high end of overlap
+        elif elapsed > 15.0:
+            prob = 0.35     # ambiguous overlap zone
+        elif elapsed > 14.0:
+            prob = 0.12     # near the boundary, probably honest
         else:
-            prob = 0.04
+            prob = 0.03     # clearly honest territory
         return random.random() < prob
 
     def _hand_strength(self, community_cards) -> float:
