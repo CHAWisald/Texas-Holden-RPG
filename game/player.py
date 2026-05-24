@@ -87,7 +87,7 @@ class HumanPlayer(Player):
         return ('check', 0) if can_check else ('fold', 0)
 
     def decide_to_cheat(self, deck) -> tuple:
-        from .cheat_system import timed_input, CHEAT_HAND_OPTIONS, CHEAT_HAND_LABELS
+        from .cheat_system import timed_input, CHEAT_HAND_OPTIONS, CHEAT_HANDS
 
         print("\n  You are the Dealer! (secret decision — others only see shuffle time)")
         raw = timed_input(
@@ -96,16 +96,19 @@ class HumanPlayer(Player):
         )
 
         if raw.lower().startswith('c'):
-            print("  Pick your hand:")
+            print("  Pick your hand (longer shuffle = riskier):")
             for i, h in enumerate(CHEAT_HAND_OPTIONS, 1):
-                print(f"    {i}. {h}  ({CHEAT_HAND_LABELS[h]})")
-            pick = timed_input("  Choice [1-5, 10s]: ", timeout=10.0, default='1')
+                info = CHEAT_HANDS[h]
+                print(f"    {i:>2}. {h:<4}  {info.label:<22}  [{info.lo:.0f}–{info.hi:.0f}s]")
+            n = len(CHEAT_HAND_OPTIONS)
+            pick = timed_input(f"  Choice [1-{n}, 15s]: ", timeout=15.0, default='1')
             try:
-                idx = max(0, min(int(pick) - 1, len(CHEAT_HAND_OPTIONS) - 1))
+                idx = max(0, min(int(pick) - 1, n - 1))
             except ValueError:
                 idx = 0
             chosen = CHEAT_HAND_OPTIONS[idx]
-            print(f"  Dealing yourself: {chosen}  ({CHEAT_HAND_LABELS[chosen]})")
+            info = CHEAT_HANDS[chosen]
+            print(f"  Dealing yourself: {chosen}  ({info.label})  [{info.lo:.0f}–{info.hi:.0f}s]")
             return True, chosen
 
         return False, None
@@ -153,24 +156,33 @@ class BotPlayer(Player):
 
     def decide_to_cheat(self, deck) -> tuple:
         if random.random() < self.aggression * 0.25:
-            chosen = random.choice(['AA', 'KK', 'QQ', 'AKs', 'AKo'])
+            from .cheat_system import CHEAT_HAND_OPTIONS
+            n = len(CHEAT_HAND_OPTIONS)
+            # Aggressive bots favour premium hands (front of list); passive bots pick safer ones
+            if self.aggression >= 0.6:
+                weights = [n - i for i in range(n)]   # front-heavy
+            else:
+                weights = [i + 1 for i in range(n)]   # back-heavy (lower-risk hands)
+            chosen = random.choices(CHEAT_HAND_OPTIONS, weights=weights, k=1)[0]
             return True, chosen
         return False, None
 
     def decide_to_accuse(self, elapsed: float, big_blind: int) -> bool:
         if self.chips < 2 * big_blind:
             return False
-        # Honest range 12.5–17.5s, cheat range 15–20s — overlap is 15–17.5s
-        if elapsed > 17.5:
-            prob = 0.80     # outside honest range entirely
+        # Honest ceiling is 18.0s. Cheat hands range from 15–20s depending on strength.
+        if elapsed > 19.5:
+            prob = 0.92     # far above honest max; only AA territory
+        elif elapsed > 18.0:
+            prob = 0.80     # above honest ceiling — definitely cheating
         elif elapsed > 17.0:
-            prob = 0.60     # high end of overlap
+            prob = 0.40     # upper overlap: QQ/AKo/JJ/AQs territory
+        elif elapsed > 16.0:
+            prob = 0.18     # mid overlap zone
         elif elapsed > 15.0:
-            prob = 0.35     # ambiguous overlap zone
-        elif elapsed > 14.0:
-            prob = 0.12     # near the boundary, probably honest
+            prob = 0.07     # lower-mid: possibly weakest cheat hands (88/KQs/99/AQo)
         else:
-            prob = 0.03     # clearly honest territory
+            prob = 0.02     # clearly honest territory
         return random.random() < prob
 
     def _hand_strength(self, community_cards) -> float:

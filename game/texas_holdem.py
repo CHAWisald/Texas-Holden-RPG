@@ -46,6 +46,12 @@ class TexasHoldem:
                 if chips_before[p] > 0 and p.chips == 0:
                     print(f"\n  *** {p.name} has been eliminated! ***")
 
+            # Stop immediately if the human is out
+            if any(p.is_human() for p in self.players) and \
+               not any(p.is_human() and p.chips > 0 for p in self.players):
+                print("\n  You have been eliminated. Game over.")
+                break
+
             if any(p.is_human() and p.chips > 0 for p in self.players):
                 try:
                     again = input("\nPlay another hand? (y/n): ").strip().lower()

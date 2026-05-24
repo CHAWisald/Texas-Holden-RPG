@@ -1,27 +1,45 @@
 import random
 import sys
 import time
+from collections import namedtuple
 
 from .card import Suit
 
 
-CHEAT_HAND_OPTIONS = ['AA', 'KK', 'QQ', 'AKs', 'AKo']
-CHEAT_HAND_LABELS = {
-    'AA':  'Pocket Aces',
-    'KK':  'Pocket Kings',
-    'QQ':  'Pocket Queens',
-    'AKs': 'Ace-King suited',
-    'AKo': 'Ace-King offsuit',
+# Per-hand shuffle time: (label, lo, hi, mean).
+# Stronger hands require a longer, riskier shuffle.
+# Honest range is 12.5–17.5 s (mean 15 s); overlap with honest shrinks as hands get stronger.
+CheatHand = namedtuple('CheatHand', ['label', 'lo', 'hi', 'mean'])
+
+CHEAT_HANDS = {
+    # Each hand has a span of 3 s. Overall cheat range: 15–20 s.
+    # Stronger hands sit higher in the range and overlap less with honest shuffles.
+    'AA':  CheatHand('Pocket Aces',         17.0, 20.0, 18.5),
+    'KK':  CheatHand('Pocket Kings',        16.5, 19.5, 18.0),
+    'QQ':  CheatHand('Pocket Queens',       16.0, 19.0, 17.5),
+    'JJ':  CheatHand('Pocket Jacks',        15.5, 18.5, 17.0),
+    'TT':  CheatHand('Pocket Tens',         15.5, 18.5, 17.0),
+    '99':  CheatHand('Pocket Nines',        15.0, 18.0, 16.5),
+    '88':  CheatHand('Pocket Eights',       15.0, 18.0, 16.5),
+    'AKs': CheatHand('Ace-King suited',     16.5, 19.5, 18.0),
+    'AKo': CheatHand('Ace-King offsuit',    16.0, 19.0, 17.5),
+    'AQs': CheatHand('Ace-Queen suited',    15.5, 18.5, 17.0),
+    'AQo': CheatHand('Ace-Queen offsuit',   15.0, 18.0, 16.5),
+    'KQs': CheatHand('King-Queen suited',   15.0, 18.0, 16.5),
 }
 
-# Shuffle durations shown to players (seconds) — ranges intentionally overlap
-HONEST_RANGE = (12.5, 17.5)
-CHEAT_RANGE  = (15.0, 20.0)
+# Derived compat aliases used by player.py
+CHEAT_HAND_OPTIONS = list(CHEAT_HANDS.keys())
+CHEAT_HAND_LABELS  = {k: v.label for k, v in CHEAT_HANDS.items()}
 
-# Gaussian centres and shared std-dev for each distribution
-HONEST_MEAN  = 15.0
-CHEAT_MEAN   = 17.5
-SHUFFLE_STD  = 1.5           # creates a realistic spread; overlap zone ≈ 15–17.5 s
+# Honest shuffle: right-skewed Beta(2, 3) on [12, 18].
+# ~70% of draws fall in [12–15 s]; long tail reaches 18 s.
+HONEST_RANGE  = (12.0, 18.0)
+HONEST_ALPHA  = 2
+HONEST_BETA   = 3
+
+# Cheat hands still use a clamped Gaussian
+SHUFFLE_STD   = 1.5
 
 # Real wall-clock scale so waits aren't painfully long
 REAL_TIME_SCALE = 0.35
@@ -62,9 +80,12 @@ class CheatSystem:
         print(f"\n  ── Shuffle Phase (Dealer: {dealer.name}) ──")
         cheated, chosen_hand = dealer.decide_to_cheat(deck)
 
-        lo, hi = CHEAT_RANGE if cheated else HONEST_RANGE
-        mean   = CHEAT_MEAN  if cheated else HONEST_MEAN
-        elapsed = max(lo, min(hi, random.gauss(mean, SHUFFLE_STD)))
+        if cheated:
+            h = CHEAT_HANDS[chosen_hand]
+            elapsed = max(h.lo, min(h.hi, random.gauss(h.mean, SHUFFLE_STD)))
+        else:
+            lo, hi = HONEST_RANGE
+            elapsed = lo + random.betavariate(HONEST_ALPHA, HONEST_BETA) * (hi - lo)
         self._animate(dealer.name, elapsed * REAL_TIME_SCALE)
         print(f"\r  {dealer.name} finished shuffling in {elapsed:.1f}s.{' ' * 12}")
 
@@ -78,9 +99,11 @@ class CheatSystem:
         Returns list of accusers (their cost is deducted immediately).
         """
         print(f"\n  ── Prosecution Window ──")
+        cheat_lo = min(h.lo for h in CHEAT_HANDS.values())
+        cheat_hi = max(h.hi for h in CHEAT_HANDS.values())
         print(f"  Shuffle: {elapsed:.1f}s  "
               f"(honest {HONEST_RANGE[0]:.0f}–{HONEST_RANGE[1]:.0f}s / "
-              f"suspicious {CHEAT_RANGE[0]:.0f}–{CHEAT_RANGE[1]:.0f}s)")
+              f"suspicious {cheat_lo:.0f}–{cheat_hi:.0f}s)")
         print(f"  Calling costs {self.cost} chips.")
 
         accusers = []
@@ -127,35 +150,38 @@ class CheatSystem:
 
     # ── Deal the chosen hand from the deck ────────────────────────────────────
 
+    _PAIR_RANK = {'AA': 14, 'KK': 13, 'QQ': 12, 'JJ': 11, 'TT': 10, '99': 9, '88': 8}
+    _SUITED_RANKS  = {'AKs': (14, 13), 'AQs': (14, 12), 'KQs': (13, 12)}
+    _OFFSUIT_RANKS = {'AKo': (14, 13), 'AQo': (14, 12)}
+
     def deal_cheat_hand(self, hand_name: str, deck) -> list:
         """Remove and return the chosen hand's two cards from the deck."""
-        cards = []
-
-        if hand_name in ('AA', 'KK', 'QQ'):
-            rank = {'AA': 14, 'KK': 13, 'QQ': 12}[hand_name]
-            cards = [c for c in deck.cards if c.rank == rank][:2]
-
-        elif hand_name == 'AKs':
-            for suit in Suit:
-                a = next((c for c in deck.cards if c.rank == 14 and c.suit == suit), None)
-                k = next((c for c in deck.cards if c.rank == 13 and c.suit == suit), None)
-                if a and k:
-                    cards = [a, k]
-                    break
-            if not cards:
-                hand_name = 'AKo'       # no suited combo available, fall through
-
-        if hand_name == 'AKo' and not cards:
-            a = next((c for c in deck.cards if c.rank == 14), None)
-            ks = [c for c in deck.cards if c.rank == 13 and (not a or c.suit != a.suit)]
-            k  = ks[0] if ks else next((c for c in deck.cards if c.rank == 13), None)
-            if a and k:
-                cards = [a, k]
-
+        cards = self._select_cards(hand_name, deck)
         for c in cards:
             deck.cards.remove(c)
-
         return cards
+
+    def _select_cards(self, hand_name: str, deck) -> list:
+        if hand_name in self._PAIR_RANK:
+            rank = self._PAIR_RANK[hand_name]
+            return [c for c in deck.cards if c.rank == rank][:2]
+
+        if hand_name in self._SUITED_RANKS:
+            r1, r2 = self._SUITED_RANKS[hand_name]
+            for suit in Suit:
+                a = next((c for c in deck.cards if c.rank == r1 and c.suit == suit), None)
+                b = next((c for c in deck.cards if c.rank == r2 and c.suit == suit), None)
+                if a and b:
+                    return [a, b]
+            # No suited combo available — fall back to offsuit with same ranks
+
+        # Offsuit (or suited fallback)
+        r1, r2 = (self._SUITED_RANKS if hand_name in self._SUITED_RANKS
+                  else self._OFFSUIT_RANKS)[hand_name]
+        c1 = next((c for c in deck.cards if c.rank == r1), None)
+        c2_diff = [c for c in deck.cards if c.rank == r2 and (not c1 or c.suit != c1.suit)]
+        c2 = c2_diff[0] if c2_diff else next((c for c in deck.cards if c.rank == r2), None)
+        return [c1, c2] if c1 and c2 else []
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
