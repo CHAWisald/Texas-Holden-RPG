@@ -122,15 +122,21 @@ class CheatSystem:
 
     # ── Phase 3: resolution ───────────────────────────────────────────────────
 
-    def resolve(self, accusers, dealer, cheated) -> bool:
+    def resolve(self, accusers, dealer, cheated, escape: bool = False) -> bool:
         """
         Transfer chips between the single accuser and dealer.
         Returns True if the dealer was caught (caller must re-deal fairly).
+        `escape` is True when a Lucky dealer avoids consequences.
         """
         if not accusers:
             return False
 
         acc = accusers[0]
+
+        if escape:
+            # Lucky role: refund the accuser, no penalty for dealer
+            acc.chips += self.cost
+            return False
 
         if cheated:
             print(f"\n  [Prosecutor] CHEATING CONFIRMED — {dealer.name} rigged the deck!")

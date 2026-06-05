@@ -11,6 +11,16 @@ class Player:
         self.street_bet = 0
         self.folded = False
         self.all_in = False
+        # Role identity — set externally after construction
+        self.role = None
+        # Cursed-role state
+        self.is_devil        = False   # currently in devil-deal state
+        self.devil_debt      = 0       # chips owed
+        self.devil_hands     = 0       # hands remaining to repay
+        self.has_cursed      = False   # one-time curse ability used
+        self.curse_hands_left = 0      # hands remaining as a curse victim
+        # Gunner-role state
+        self.bullets_used    = 0       # total shots fired (self + others)
 
     def reset_hand(self):
         self.hole_cards = []

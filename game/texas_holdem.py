@@ -2,6 +2,7 @@ from collections import deque
 from .card import Deck
 from .cheat_system import CheatSystem
 from .hand_evaluator import HandEvaluator
+from .roles import RoleSystem, RoleType
 
 class TexasHoldem:
     def __init__(self, players, small_blind: int = 10, big_blind: int = 20):
@@ -13,6 +14,7 @@ class TexasHoldem:
         self.community_cards = []
         self.pot = 0
         self.cheat_system = CheatSystem(big_blind)
+        self.role_system  = RoleSystem(big_blind)
 
     # ── Public entry point ────────────────────────────────────────────────────
 
@@ -41,17 +43,44 @@ class TexasHoldem:
             chips_before = {p: p.chips for p in self.players}
             self.play_hand()
 
-            # Announce any players newly eliminated this hand
-            for p in self.players:
-                if chips_before[p] > 0 and p.chips == 0:
+            # ── Post-hand revival & elimination ───────────────────────────────
+            newly_bust = [p for p in self.players
+                          if chips_before[p] > 0 and p.chips == 0]
+            revived = set()
+            for p in newly_bust:
+                if self.role_system.handle_bust(p):
+                    revived.add(p)
+
+            for p in newly_bust:
+                if p not in revived:
                     print(f"\n  *** {p.name} has been eliminated! ***")
 
-            # Stop immediately if the human is out
+            # Devil-debt countdown (happens after the hand is fully resolved)
+            all_in_play = [p for p in self.players if p.chips > 0]
+            self.role_system.tick_devil_debts(all_in_play)
+
+            # ── Stop if human is out ──────────────────────────────────────────
+            human_alive = any(p.is_human() and p.chips > 0 for p in self.players)
+            if any(p.is_human() for p in self.players) and not human_alive:
+                print("\n  You have been eliminated. Game over.")
+                break
+
+            # ── Between-hand role abilities ───────────────────────────────────
+            active_now = [p for p in self.players if p.chips > 0]
+            for p in active_now:
+                self.role_system.offer_curse_ability(p, active_now)
+                self.role_system.offer_shoot_ability(p, active_now)
+
+            # Re-check for victims of a shooting
+            active_now = [p for p in self.players if p.chips > 0]
+            if len(active_now) < 2:
+                break
             if any(p.is_human() for p in self.players) and \
                not any(p.is_human() and p.chips > 0 for p in self.players):
                 print("\n  You have been eliminated. Game over.")
                 break
 
+            # ── Continue prompt (only when human is still in) ─────────────────
             if any(p.is_human() and p.chips > 0 for p in self.players):
                 try:
                     again = input("\nPlay another hand? (y/n): ").strip().lower()
@@ -78,23 +107,22 @@ class TexasHoldem:
         n = len(active)
         dealer_pos = self.dealer_idx % n
 
-        # Position assignments (heads-up: dealer = SB)
         if n == 2:
-            sb_pos = dealer_pos
-            bb_pos = (dealer_pos + 1) % n
-            utg_pos = dealer_pos  # SB acts first pre-flop heads-up
+            sb_pos  = dealer_pos
+            bb_pos  = (dealer_pos + 1) % n
+            utg_pos = dealer_pos
         else:
-            sb_pos = (dealer_pos + 1) % n
-            bb_pos = (dealer_pos + 2) % n
+            sb_pos  = (dealer_pos + 1) % n
+            bb_pos  = (dealer_pos + 2) % n
             utg_pos = (dealer_pos + 3) % n
 
-        dealer   = active[dealer_pos]
+        dealer    = active[dealer_pos]
         sb_player = active[sb_pos]
         bb_player = active[bb_pos]
 
         print(f"\n  Dealer: {dealer.name}  |  SB: {sb_player.name}  |  BB: {bb_player.name}")
+        self._show_roles(active)
 
-        # Post blinds
         self._place_bet(sb_player, self.small_blind)
         self._place_bet(bb_player, self.big_blind)
         print(f"  Blinds posted. Pot: {self.pot}")
@@ -102,26 +130,38 @@ class TexasHoldem:
         # ── Shuffle / cheat phase ─────────────────────────────────────────────
         cheated, elapsed, chosen_hand = self.cheat_system.shuffle_phase(dealer, self.deck)
         accusers = self.cheat_system.accusation_phase(active, dealer, elapsed)
-        caught   = self.cheat_system.resolve(accusers, dealer, cheated)
+
+        lucky_escape = self.role_system.check_lucky_escape(dealer) if accusers else False
+        caught = self.cheat_system.resolve(accusers, dealer, cheated, escape=lucky_escape)
 
         if caught:
-            # Prosecutor re-shuffles; everyone gets a fair random hand
             self.deck.reset()
             for p in active:
                 p.hole_cards = self.deck.deal(2)
         else:
-            # Deal normally; dealer gets the chosen cheat hand if uncaught
             for p in active:
                 if cheated and p is dealer:
                     p.hole_cards = self.cheat_system.deal_cheat_hand(chosen_hand, self.deck)
+                elif p.role == RoleType.LUCKY:
+                    p.hole_cards = self.role_system.lucky_deal(p, self.deck)
                 else:
                     p.hole_cards = self.deck.deal(2)
 
-        # Show human player their hole cards
+        # ── Apply devil / curse effects on dealt hands ────────────────────────
+        for p in active:
+            if p.is_devil:
+                self.role_system.apply_devil_hand(p, self.deck)
+            if p.curse_hands_left > 0:
+                self.role_system.apply_victim_curse(p, self.deck)
+
+        # Show human their (possibly modified) hole cards
         for p in active:
             if p.is_human():
                 label = "Your new hole cards" if caught else "Your hole cards"
                 print(f"\n  {label}: {' '.join(str(c) for c in p.hole_cards)}")
+                if p.is_devil:
+                    print(f"  [Devil's Ledger] Debt: {p.devil_debt} | "
+                          f"Hands left: {p.devil_hands}")
 
         # ── Pre-flop ──────────────────────────────────────────────────────────
         print("\n  ── Pre-flop ──")
@@ -160,10 +200,6 @@ class TexasHoldem:
     # ── Betting round ─────────────────────────────────────────────────────────
 
     def _betting_round(self, players, current_bet: int = 0) -> bool:
-        """
-        Run one betting street. Returns True if 2+ players remain in the hand.
-        current_bet: the amount everyone must reach (pre-flop = big blind).
-        """
         active = [p for p in players if not p.folded]
         if len(active) <= 1:
             return False
@@ -177,7 +213,6 @@ class TexasHoldem:
             if player.folded or player.all_in:
                 continue
 
-            # Stop early if only one non-folded player remains
             if len([p for p in players if not p.folded]) <= 1:
                 break
 
@@ -203,12 +238,11 @@ class TexasHoldem:
                 print(f"  {player.name} calls {actual}{suffix}.  Pot: {self.pot}")
 
             elif action == 'raise':
-                # amount = raise SIZE on top of the call
                 actual = self._place_bet(player, to_call + amount)
                 new_bet = player.street_bet
                 if new_bet > current_bet:
                     raise_size = new_bet - current_bet
-                    min_raise = max(min_raise, raise_size)
+                    min_raise  = max(min_raise, raise_size)
                     current_bet = new_bet
                     to_act = deque(
                         p for p in players if not p.folded and not p.all_in and p is not player
@@ -218,10 +252,10 @@ class TexasHoldem:
                     print(f"  {player.name} goes all-in for {actual}.  Pot: {self.pot}")
 
             elif action == 'all-in':
-                actual = self._place_bet(player, player.chips)
+                actual  = self._place_bet(player, player.chips)
                 new_bet = player.street_bet
                 if new_bet > current_bet:
-                    raise_size = new_bet - current_bet
+                    raise_size  = new_bet - current_bet
                     current_bet = new_bet
                     if raise_size >= min_raise:
                         min_raise = raise_size
@@ -241,10 +275,10 @@ class TexasHoldem:
             active[0].chips += self.pot
             print(f"\n  {active[0].name} wins the pot of {self.pot}! "
                   f"(Chips: {active[0].chips})")
+            self.role_system.detect_bluff_reward(active[0], self.community_cards)
         else:
             self._showdown(active)
 
-        # Rotate dealer to next player who still has chips
         all_with_chips = [p for p in self.players if p.chips > 0]
         if all_with_chips:
             self.dealer_idx = (self.dealer_idx + 1) % len(all_with_chips)
@@ -260,9 +294,9 @@ class TexasHoldem:
             results.append((score, p))
 
         best_score = max(r[0] for r in results)
-        winners = [p for score, p in results if score == best_score]
+        winners    = [p for score, p in results if score == best_score]
 
-        share = self.pot // len(winners)
+        share     = self.pot // len(winners)
         remainder = self.pot % len(winners)
 
         for w in winners:
@@ -280,9 +314,9 @@ class TexasHoldem:
 
     def _place_bet(self, player, amount: int) -> int:
         amount = min(amount, player.chips)
-        player.chips -= amount
+        player.chips     -= amount
         player.street_bet += amount
-        self.pot += amount
+        self.pot          += amount
         if player.chips == 0:
             player.all_in = True
         return amount
@@ -301,3 +335,8 @@ class TexasHoldem:
 
     def _board_str(self) -> str:
         return ' '.join(str(c) for c in self.community_cards)
+
+    def _show_roles(self, players):
+        parts = [f"{p.name}({p.role.value if p.role else 'no role'})"
+                 for p in players]
+        print(f"  Roles   : {', '.join(parts)}")
