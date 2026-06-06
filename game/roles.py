@@ -87,25 +87,41 @@ class RoleSystem:
         return True
 
     def _gunner_bust(self, player) -> bool:
-        chips = self.DEVIL_LOAN_BB * self.bb
+        if player.died_by_revolver:
+            return False  # already killed themselves via ability this hand
+
+        chips   = self.DEVIL_LOAN_BB * self.bb
+        chamber = player.gun_current_chamber + 1
 
         if player.is_human():
-            shot_num = player.bullets_used + 1
             print(f"\n  ╔══ Russian Roulette ══════════════════════╗")
-            print(f"  ║  Pull the trigger — gain {chips} chips.     ║")
-            print(f"  ║  This is bullet #{shot_num}. Gun can't reload. ║")
+            print(f"  ║  Chamber {chamber}/6 — pull the trigger!      ║")
+            print(f"  ║  CLICK → +{chips} chips and survive.      ║")
+            print(f"  ║  BANG  → truly eliminated.              ║")
             print(f"  ╚══════════════════════════════════════════╝")
             ans = timed_input("  Shoot yourself? [y/n, 15s]: ",
                               timeout=15.0, default='n')
             if not ans.lower().startswith('y'):
                 return False
-            print(f"  *CLICK* You survive. +{chips} chips.")
         else:
-            print(f"\n  *** {player.name} pulls the trigger! *CLICK* "
-                  f"+{chips} chips ***")
+            print(f"\n  *** {player.name} pulls the trigger! Chamber {chamber}/6 ***")
 
-        player.chips         += chips
-        player.bullets_used  += 1
+        player.bullets_used += 1
+        fired = self._fire_revolver(player)
+
+        if fired:
+            if player.is_human():
+                print(f"  *** BANG! The gun fires — you are eliminated! ***")
+            else:
+                print(f"  *** BANG! {player.name} is eliminated by their own gun! ***")
+            player.died_by_revolver = True
+            return False
+
+        player.chips += chips
+        if player.is_human():
+            print(f"  *CLICK* You survive! +{chips} chips.")
+        else:
+            print(f"  *** *CLICK* {player.name} survives! +{chips} chips ***")
         return True
 
     # ── Devil-state hand tampering ────────────────────────────────────────────
@@ -253,9 +269,7 @@ class RoleSystem:
 
     def offer_curse_ability(self, cursed_player, all_players):
         """Offer the Cursed player their one-time ability to curse an opponent."""
-        if (cursed_player.role != RoleType.CURSED
-                or cursed_player.has_cursed
-                or not cursed_player.is_devil):
+        if cursed_player.role != RoleType.CURSED or cursed_player.has_cursed:
             return
 
         targets = [p for p in all_players
@@ -307,59 +321,123 @@ class RoleSystem:
     # ── Gunner: shoot an opponent ─────────────────────────────────────────────
 
     def offer_shoot_ability(self, gunner, all_players):
-        """Offer the Gunner player the ability to shoot an opponent."""
+        """Offer the Gunner player the ability to shoot an opponent or themselves."""
         if gunner.role != RoleType.GUNNER:
             return
 
         cost = self.GUNNER_BASE_BB * self.bb * (2 ** gunner.bullets_used)
-        if gunner.chips < cost:
-            return
-
         targets = [p for p in all_players if p is not gunner and p.chips > 0]
-        if not targets:
-            return
 
+        # Humans always see the menu (self-shoot is free; opponent cost shown if affordable)
         if gunner.is_human():
             self._human_shoot(gunner, targets, cost)
         else:
-            self._bot_shoot(gunner, targets, cost)
+            # Bots only act if they can shoot an opponent or feel desperate
+            if gunner.chips >= cost and targets:
+                self._bot_shoot(gunner, targets, cost)
+            elif gunner.chips < cost * 0.5:
+                # Very low chips — small chance to self-shoot for chips
+                import random
+                if random.random() < 0.05:
+                    self._do_shoot_self(gunner, self.DEVIL_LOAN_BB * self.bb)
 
     def _human_shoot(self, player, targets, cost):
+        revival   = self.DEVIL_LOAN_BB * self.bb
         next_cost = cost * 2
-        print(f"\n  ╔══ Gunner's Revolver ═══════════════════╗")
-        print(f"  ║  Shoot an opponent — costs {cost} chips.  ║")
-        print(f"  ║  (Chips burned — eliminated on hit)    ║")
-        print(f"  ║  Next shot will cost: {next_cost} chips.     ║")
-        print(f"  ╚════════════════════════════════════════╝")
-        print("  Targets:")
-        for i, p in enumerate(targets, 1):
-            print(f"    {i}. {p.name}  ({p.chips} chips)")
-        print(f"    0. Don't shoot")
-        raw = timed_input(f"  Who to shoot? [0–{len(targets)}, 15s]: ",
-                          timeout=15.0, default='0')
+        chamber   = player.gun_current_chamber + 1
+        can_afford = player.chips >= cost
+        print(f"\n  ╔══ Gunner's Revolver ════════════════════╗")
+        print(f"  ║  Chamber {chamber}/6 — Russian roulette.      ║")
+        if can_afford and targets:
+            print(f"  ║  Shoot opponent — {cost} chips, may miss.  ║")
+        elif targets:
+            print(f"  ║  Shoot opponent — {cost} chips (can't afford). ║")
+        else:
+            print(f"  ║  No targets available.                  ║")
+        print(f"  ║  Shoot yourself — gain {revival} (or die).  ║")
+        print(f"  ║  Next opponent-shot cost: {next_cost} chips.  ║")
+        print(f"  ╚═════════════════════════════════════════╝")
+        if can_afford and targets:
+            print("  Targets:")
+            for i, p in enumerate(targets, 1):
+                print(f"    {i}. {p.name}  ({p.chips} chips)")
+        print(f"    0. Shoot yourself (+{revival} on click / eliminated on bang)")
+        print(f"   -1. Holster gun")
+        max_idx = len(targets) if can_afford else 0
+        raw = timed_input(f"  Who to shoot? [-1..{max_idx}, 15s]: ",
+                          timeout=15.0, default='-1')
         try:
             idx = int(raw.strip())
         except ValueError:
-            idx = 0
-        if 1 <= idx <= len(targets):
+            idx = -1
+        if idx == 0:
+            self._do_shoot_self(player, revival)
+        elif can_afford and 1 <= idx <= len(targets):
             self._do_shoot(player, targets[idx - 1], cost)
 
     def _bot_shoot(self, player, targets, cost):
-        if random.random() > 0.15:  # bots shoot ~15% chance per hand
-            return
-        target = max(targets, key=lambda p: p.chips)
-        self._do_shoot(player, target, cost)
+        roll = random.random()
+        if roll < 0.05 and player.chips < cost:
+            # Low on chips — gamble with self-shot
+            revival = self.DEVIL_LOAN_BB * self.bb
+            self._do_shoot_self(player, revival)
+        elif roll < 0.15 and targets:
+            target = max(targets, key=lambda p: p.chips)
+            self._do_shoot(player, target, cost)
 
     def _do_shoot(self, shooter, target, cost):
         shooter.chips        -= cost
         shooter.bullets_used += 1
+
         immune = self._lucky_immune(target, "the bullet")
+        fired  = self._fire_revolver(shooter)
+
         if immune:
-            print(f"  *** {shooter.name} fired! Chips burned: {cost}. ***")
+            print(f"\n  *** {shooter.name} fired at {target.name}! "
+                  f"({cost} chips burned — {'BANG' if fired else 'click'}, but immune!) ***")
             return
+
+        if not fired:
+            print(f"\n  *** *CLICK* — {shooter.name} pulls the trigger on "
+                  f"{target.name}... misfires! ({cost} chips burned) ***")
+            return
+
         target.chips = 0
+        self._reload_revolver(shooter)
         print(f"\n  *** BANG! {shooter.name} shoots {target.name}! "
-              f"({cost} chips burned — {target.name} eliminated!) ***")
+              f"({cost} chips burned — {target.name} eliminated! Gun reloaded.) ***")
+
+    def _do_shoot_self(self, player, revival_chips):
+        """Player voluntarily shoots themselves mid-game. Revolver applies."""
+        player.bullets_used += 1
+        fired = self._fire_revolver(player)
+
+        if fired:
+            player.chips = 0
+            player.died_by_revolver = True
+            if player.is_human():
+                print(f"\n  *** BANG! You pulled the trigger — it fires! Eliminated! ***")
+            else:
+                print(f"\n  *** BANG! {player.name} pulls the trigger — eliminated! ***")
+        else:
+            player.chips += revival_chips
+            if player.is_human():
+                print(f"\n  *** *CLICK* You survive the shot! +{revival_chips} chips. ***")
+            else:
+                print(f"\n  *** *CLICK* {player.name} survives! +{revival_chips} chips ***")
+
+    # ── Revolver helpers ─────────────────────────────────────────────────────
+
+    def _fire_revolver(self, shooter) -> bool:
+        """Advance chamber and return True if the bullet fires."""
+        fired = (shooter.gun_current_chamber == shooter.gun_bullet_chamber)
+        shooter.gun_current_chamber = (shooter.gun_current_chamber + 1) % 6
+        return fired
+
+    def _reload_revolver(self, shooter):
+        """After a kill: randomly place a new bullet, reset chamber to 0."""
+        shooter.gun_bullet_chamber  = random.randint(0, 5)
+        shooter.gun_current_chamber = 0
 
     # ── Lucky: draw 3, keep 2 ─────────────────────────────────────────────────
 

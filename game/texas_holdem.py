@@ -1,3 +1,4 @@
+import random
 from collections import deque
 from .card import Deck
 from .cheat_system import CheatSystem
@@ -216,6 +217,17 @@ class TexasHoldem:
             if len([p for p in players if not p.folded]) <= 1:
                 break
 
+            # Bot ability: small chance to use role ability before betting
+            if not player.is_human():
+                self._try_bot_inhand_ability(player, players)
+                self._fold_dead_players(players)
+                if player.chips == 0:
+                    player.folded = True
+                if player.folded or player.all_in:
+                    continue
+                if len([p for p in players if not p.folded]) <= 1:
+                    break
+
             to_call = current_bet - player.street_bet
             action, amount = player.get_action(
                 current_bet=current_bet,
@@ -223,7 +235,12 @@ class TexasHoldem:
                 min_raise=min_raise,
                 pot=self.pot,
                 community_cards=self.community_cards,
+                role_system=self.role_system,
+                all_players=players,
             )
+
+            # Fold any players shot dead by a human ability use this action
+            self._fold_dead_players(players)
 
             if action == 'fold':
                 player.folded = True
@@ -335,6 +352,21 @@ class TexasHoldem:
 
     def _board_str(self) -> str:
         return ' '.join(str(c) for c in self.community_cards)
+
+    def _fold_dead_players(self, players):
+        """Fold any player shot dead (chips=0 but not all-in) mid-hand."""
+        for p in players:
+            if p.chips == 0 and not p.folded and not p.all_in:
+                p.folded = True
+
+    def _try_bot_inhand_ability(self, player, players):
+        """Give bots a small chance to use their role ability on their turn."""
+        if player.role == RoleType.GUNNER and random.random() < 0.05:
+            targets = [p for p in players if p is not player and p.chips > 0]
+            self.role_system.offer_shoot_ability(player, targets)
+        elif player.role == RoleType.CURSED and not player.has_cursed and random.random() < 0.05:
+            targets = [p for p in players if p is not player and p.chips > 0]
+            self.role_system.offer_curse_ability(player, targets)
 
     def _show_roles(self, players):
         parts = [f"{p.name}({p.role.value if p.role else 'no role'})"

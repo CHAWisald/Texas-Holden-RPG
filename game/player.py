@@ -20,7 +20,10 @@ class Player:
         self.has_cursed      = False   # one-time curse ability used
         self.curse_hands_left = 0      # hands remaining as a curse victim
         # Gunner-role state
-        self.bullets_used    = 0       # total shots fired (self + others)
+        self.bullets_used        = 0       # trigger pulls (determines next shot cost)
+        self.died_by_revolver    = False   # killed by own gun mid-ability; skip bust revival
+        self.gun_bullet_chamber  = random.randint(0, 5)  # which chamber holds the bullet
+        self.gun_current_chamber = 0       # which chamber fires next
 
     def reset_hand(self):
         self.hole_cards = []
@@ -31,7 +34,7 @@ class Player:
     def is_human(self) -> bool:
         return False
 
-    def get_action(self, current_bet, to_call, min_raise, pot, community_cards):
+    def get_action(self, current_bet, to_call, min_raise, pot, community_cards, role_system=None, all_players=None):
         raise NotImplementedError
 
     def decide_to_cheat(self, deck) -> tuple:
@@ -46,55 +49,80 @@ class HumanPlayer(Player):
     def is_human(self) -> bool:
         return True
 
-    def get_action(self, current_bet, to_call, min_raise, pot, community_cards):
+    def get_action(self, current_bet, to_call, min_raise, pot, community_cards, role_system=None, all_players=None):
         from .cheat_system import timed_input
+        from .roles import RoleType
 
-        print(f"\n  ── Your Turn ─────────────────────────")
-        print(f"  Chips: {self.chips}  |  Pot: {pot}")
-        if community_cards:
-            print(f"  Board : {' '.join(str(c) for c in community_cards)}")
-        print(f"  Hand  : {' '.join(str(c) for c in self.hole_cards)}")
+        ability_available = (
+            role_system is not None and all_players is not None and (
+                self.role == RoleType.GUNNER or
+                (self.role == RoleType.CURSED and not self.has_cursed)
+            )
+        )
 
-        can_check = to_call == 0
-        auto = 'c' if can_check else 'f'
+        while True:
+            print(f"\n  ── Your Turn ─────────────────────────")
+            print(f"  Chips: {self.chips}  |  Pot: {pot}")
+            if community_cards:
+                print(f"  Board : {' '.join(str(c) for c in community_cards)}")
+            print(f"  Hand  : {' '.join(str(c) for c in self.hole_cards)}")
 
-        if can_check:
-            print(f"  Actions: check (c)  |  raise <n> (r <n>)  |  fold (f)  [30s]")
-        else:
-            print(f"  To call: {min(to_call, self.chips)}")
-            print(f"  Actions: call (c)  |  raise <n> (r <n>)  |  all-in (a)  |  fold (f)  [30s]")
+            can_check = to_call == 0
+            auto = 'c' if can_check else 'f'
 
-        raw = timed_input("  > ", timeout=30.0, default=auto)
-        if not raw:
-            raw = auto
+            if can_check:
+                line = "  Actions: check (c)  |  raise <n> (r <n>)  |  fold (f)"
+            else:
+                print(f"  To call: {min(to_call, self.chips)}")
+                line = "  Actions: call (c)  |  raise <n> (r <n>)  |  all-in (a)  |  fold (f)"
+            if ability_available:
+                line += "  |  ability (u)"
+            print(line + "  [30s]")
 
-        parts = raw.strip().lower().split()
-        cmd   = parts[0] if parts else auto
+            raw = timed_input("  > ", timeout=30.0, default=auto)
+            if not raw:
+                raw = auto
 
-        if cmd in ('f', 'fold'):
-            return ('fold', 0)
+            parts = raw.strip().lower().split()
+            cmd   = parts[0] if parts else auto
 
-        if cmd in ('c', 'call', 'check'):
-            return ('check', 0) if can_check else ('call', to_call)
+            if cmd == 'u' and ability_available:
+                if self.role == RoleType.GUNNER:
+                    role_system.offer_shoot_ability(self, all_players)
+                    if self.chips == 0:
+                        self.folded = True
+                        return ('fold', 0)
+                    # Re-check if ability still available (cost may have changed)
+                    ability_available = self.role == RoleType.GUNNER
+                elif self.role == RoleType.CURSED:
+                    role_system.offer_curse_ability(self, all_players)
+                    ability_available = not self.has_cursed
+                continue
 
-        if cmd in ('a', 'allin', 'all-in', 'all_in'):
-            return ('all-in', self.chips)
+            if cmd in ('f', 'fold'):
+                return ('fold', 0)
 
-        if cmd in ('r', 'raise', 'bet'):
-            if len(parts) >= 2:
-                try:
-                    amount = int(parts[1])
-                    if amount < min_raise and to_call + amount < self.chips:
-                        print(f"  Min raise is {min_raise}, using that.")
-                        amount = min_raise
-                    return ('raise', amount)
-                except ValueError:
-                    pass
-            print(f"  No valid amount — raising minimum ({min_raise}).")
-            return ('raise', min_raise)
+            if cmd in ('c', 'call', 'check'):
+                return ('check', 0) if can_check else ('call', to_call)
 
-        print(f"  Unrecognised — defaulting to {'check' if can_check else 'fold'}.")
-        return ('check', 0) if can_check else ('fold', 0)
+            if cmd in ('a', 'allin', 'all-in', 'all_in'):
+                return ('all-in', self.chips)
+
+            if cmd in ('r', 'raise', 'bet'):
+                if len(parts) >= 2:
+                    try:
+                        amount = int(parts[1])
+                        if amount < min_raise and to_call + amount < self.chips:
+                            print(f"  Min raise is {min_raise}, using that.")
+                            amount = min_raise
+                        return ('raise', amount)
+                    except ValueError:
+                        pass
+                print(f"  No valid amount — raising minimum ({min_raise}).")
+                return ('raise', min_raise)
+
+            print(f"  Unrecognised — defaulting to {'check' if can_check else 'fold'}.")
+            return ('check', 0) if can_check else ('fold', 0)
 
     def decide_to_cheat(self, deck) -> tuple:
         from .cheat_system import timed_input, CHEAT_HAND_OPTIONS, CHEAT_HANDS
@@ -138,7 +166,7 @@ class BotPlayer(Player):
         super().__init__(name, chips)
         self.aggression = aggression
 
-    def get_action(self, current_bet, to_call, min_raise, pot, community_cards):
+    def get_action(self, current_bet, to_call, min_raise, pot, community_cards, role_system=None, all_players=None):
         strength = self._hand_strength(community_cards)
 
         pot_odds = to_call / (pot + to_call) if to_call > 0 and pot > 0 else 0.0
