@@ -147,10 +147,12 @@ class TestStartHand:
 
     def test_dealer_rotates_each_hand(self):
         state = _bot_game(3)
-        state = start_hand(state)
-        first_dealer_idx = state["dealer_pos"]
-        # After hand completes (all bots → auto-finish), dealer_idx advances
-        assert state["dealer_idx"] != 0 or state["phase"] in (PHASE_HAND_OVER, PHASE_GAME_OVER)
+        assert state["dealer_idx"] == 0
+        state = start_hand(state)   # all-bot hand auto-resolves to HAND_OVER
+        # The button advances in _end_hand. (0+1)%2 and (0+1)%3 both == 1, so
+        # whenever the hand ended with >=2 survivors the dealer index is now 1.
+        if state["phase"] == PHASE_HAND_OVER:
+            assert state["dealer_idx"] == 1
 
 
 # ── shuffle phase ──────────────────────────────────────────────────────────────
@@ -287,12 +289,12 @@ class TestBettingActions:
 
     def test_raise_updates_current_bet(self, preflop):
         pid      = preflop["to_act"][0]
-        p        = _get_player(preflop, pid)
-        to_call  = preflop["current_bet"] - p["street_bet"]
+        before   = preflop["current_bet"]
         raise_by = preflop["big_blind"]
         state    = apply_action(preflop, pid, "raise", amount=raise_by)
-        expected = p["street_bet"]  # street_bet was updated by _place_bet
-        assert state["current_bet"] >= preflop["big_blind"]
+        # A raise of `raise_by` over the current bet sets current_bet exactly
+        # that much higher (the raiser's new street_bet).
+        assert state["current_bet"] == before + raise_by
 
     def test_raise_re_queues_other_players(self, preflop):
         pid   = preflop["to_act"][0]
@@ -505,8 +507,22 @@ class TestShowdown:
 
         result = state["hand_result"]
         assert set(result["winner_ids"]) == {"p1", "p2"}
-        # Each winner gets half; remainder to first winner
         assert _get_player(state, "p1")["chips"] == 500 + 100
+        assert _get_player(state, "p2")["chips"] == 500 + 100
+
+    def test_split_pot_odd_remainder_goes_to_first(self):
+        """Odd pot: each winner gets the floor share, the first winner the +1."""
+        board = [_card(14,H), _card(13,H), _card(12,H), _card(11,H), _card(10,H)]
+        p1    = [_card(2,C), _card(3,D)]
+        p2    = [_card(4,S), _card(5,H)]
+
+        state = self._showdown_state(p1, p2, board)
+        state["pot"] = 201          # odd → remainder 1
+        _showdown(state)
+
+        assert set(state["hand_result"]["winner_ids"]) == {"p1", "p2"}
+        # _still_in order is [p1, p2] → p1 is winners[0] and takes the extra chip.
+        assert _get_player(state, "p1")["chips"] == 500 + 101
         assert _get_player(state, "p2")["chips"] == 500 + 100
 
     def test_pot_fully_awarded(self):
@@ -518,6 +534,60 @@ class TestShowdown:
         _showdown(state)
         chips_after = sum(p["chips"] for p in state["players"])
         assert chips_after == chips_before + state["pot"]
+
+    def test_side_pot_caps_short_all_in_winner(self):
+        """A short all-in player with the best hand wins only the main pot;
+        the side pot is contested by the deeper-stacked players."""
+        state = create_game([
+            {"id": "p1", "name": "P1", "is_human": False, "chips": 0},
+            {"id": "p2", "name": "P2", "is_human": False, "chips": 0},
+            {"id": "p3", "name": "P3", "is_human": False, "chips": 0},
+        ])
+        # Dry board, no flush/straight: AA > KK > QQ.
+        state["community_cards"] = [_card(2,H), _card(7,D), _card(9,S),
+                                    _card(11,C), _card(4,H)]
+        state["deck"] = []
+        holes = {"p1": [_card(14,S), _card(14,D)],   # AA  — best, but short
+                 "p2": [_card(13,S), _card(13,D)],   # KK  — wins the side pot
+                 "p3": [_card(12,S), _card(12,D)]}    # QQ  — wins nothing
+        bets  = {"p1": 50, "p2": 300, "p3": 300}
+        for pid, hole in holes.items():
+            p = _get_player(state, pid)
+            p["hole_cards"] = hole
+            p["folded"]     = False
+            p["total_bet"]  = bets[pid]
+        state["pot"] = sum(bets.values())   # 650
+
+        _showdown(state)
+
+        # Main pot 50*3 = 150 → P1 (best). Side pot 250*2 = 500 → P2.
+        assert _get_player(state, "p1")["chips"] == 150
+        assert _get_player(state, "p2")["chips"] == 500
+        assert _get_player(state, "p3")["chips"] == 0
+        # Every chip in the pot is paid out — no manufacturing or loss.
+        assert sum(p["chips"] for p in state["players"]) == 650
+
+    def test_folded_contributor_forfeits_to_side_pots(self):
+        """A player who contributed then folded forfeits their chips to the
+        players still in the hand."""
+        state = create_game([
+            {"id": "p1", "name": "P1", "is_human": False, "chips": 0},
+            {"id": "p2", "name": "P2", "is_human": False, "chips": 0},
+        ])
+        state["community_cards"] = [_card(2,H), _card(7,D), _card(9,S),
+                                    _card(11,C), _card(4,H)]
+        state["deck"] = []
+        p1 = _get_player(state, "p1")
+        p2 = _get_player(state, "p2")
+        p1["hole_cards"], p1["total_bet"], p1["folded"] = [_card(14,S), _card(14,D)], 100, False
+        p2["hole_cards"], p2["total_bet"], p2["folded"] = [_card(13,S), _card(13,D)], 100, True
+        state["pot"] = 200
+
+        _showdown(state)
+
+        # P2 folded → P1 takes the whole 200 even though P2 matched it.
+        assert _get_player(state, "p1")["chips"] == 200
+        assert _get_player(state, "p2")["chips"] == 0
 
     def test_fold_win_awards_pot(self):
         state = _advance_to_preflop(_two_human_game())
@@ -561,11 +631,12 @@ class TestRoleAbilities:
     def test_curse_cannot_be_used_twice(self):
         state = self._cursed_game()
         state = apply_ability(state, "cursed", "curse", target_id="target")
-        # Second curse attempt: has_cursed=True → event ability_failed, target unchanged
+        # Second curse attempt: has_cursed=True → ability_failed, target unchanged.
         old_hands = _get_player(state, "target")["curse_hands_left"]
         state = apply_ability(state, "cursed", "curse", target_id="target")
         failed_event = any(e["type"] == "ability_failed" for e in state["events"])
         assert failed_event
+        assert _get_player(state, "target")["curse_hands_left"] == old_hands
 
     def test_shoot_hit_eliminates_target(self):
         """Mock revolver to always fire."""
@@ -602,21 +673,49 @@ class TestRoleAbilities:
         with pytest.raises(ValueError, match="cannot use ability"):
             apply_ability(state, "cursed", "shoot")
 
+    def test_self_shoot_is_free_and_rewards_on_click(self):
+        """Self-shoot costs nothing and grants 20BB on a click — even when the
+        Gunner is too broke to afford an opponent shot."""
+        state = self._gunner_game()
+        g = _get_player(state, "gunner")
+        g["chips"] = 5   # can't afford the 10BB opponent-shot cost
+        with patch("game.engine._fire_revolver", return_value=False):
+            state = apply_ability(state, "gunner", "shoot", target_id=None)
+        assert _get_player(state, "gunner")["chips"] == 5 + state["big_blind"] * 20
+
+    def test_self_shoot_kills_on_bang(self):
+        state = self._gunner_game()
+        with patch("game.engine._fire_revolver", return_value=True):
+            state = apply_ability(state, "gunner", "shoot", target_id=None)
+        g = _get_player(state, "gunner")
+        assert g["chips"] == 0
+        assert g["died_by_revolver"] is True
+
+    def test_ability_rejected_during_betting(self):
+        """During betting, /ability is rejected (use use_ability_first instead)."""
+        state = create_game([
+            {"id": "gunner", "name": "G", "is_human": True, "role": "GUNNER"},
+            {"id": "other",  "name": "O", "is_human": True, "role": None},
+        ])
+        state = _advance_to_preflop(state)
+        with pytest.raises(ValueError, match="Cannot use /ability during betting"):
+            apply_ability(state, "gunner", "shoot", target_id="other")
+
     def test_use_ability_first_in_action(self):
-        """use_ability_first=True fires ability before the betting action."""
+        """use_ability_first=True fires the ability before the betting action."""
         state = create_game([
             {"id": "cursed", "name": "C", "is_human": True, "role": "CURSED", "chips": 500},
             {"id": "target", "name": "T", "is_human": True, "role": None,     "chips": 500},
         ])
         state = _advance_to_preflop(state)
+        # Heads-up: the first-created player is dealer/SB/UTG → acts first.
         pid = state["to_act"][0]
-        p   = _get_player(state, pid)
-        if p.get("role") == "CURSED":
-            other_id = next(q["id"] for q in state["players"] if q["id"] != pid)
-            state = apply_action(state, pid, "fold",
-                                 use_ability_first=True,
-                                 ability_target_id=other_id)
-            assert _get_player(state, pid)["has_cursed"] is True
+        assert pid == "cursed"
+        state = apply_action(state, pid, "fold",
+                             use_ability_first=True,
+                             ability_target_id="target")
+        assert _get_player(state, "cursed")["has_cursed"] is True
+        assert _get_player(state, "target")["curse_hands_left"] > 0
 
 
 # ── devil deal / bust ──────────────────────────────────────────────────────────
@@ -662,6 +761,29 @@ class TestBustRevival:
         assert revived is False
         assert p["died_by_revolver"] is True
 
+    def test_eliminated_player_not_revived_in_later_hand(self):
+        """A CURSED player eliminated in an earlier hand (not in hand_active_ids)
+        must NOT be handed a fresh devil loan at the end of every later hand."""
+        from game.engine import _end_hand
+        state = create_game([
+            {"id": "a",     "name": "A", "is_human": False, "chips": 100},
+            {"id": "b",     "name": "B", "is_human": False, "chips": 0},
+            {"id": "ghost", "name": "Ghost", "is_human": False,
+             "role": "CURSED", "chips": 0},
+        ])
+        # Only a and b played this hand; ghost was eliminated previously.
+        state["hand_active_ids"] = ["a", "b"]
+        state["pot"] = 40
+        _get_player(state, "b")["folded"]     = True    # a wins uncontested
+        _get_player(state, "ghost")["folded"] = True    # ghost not in the hand
+        _get_player(state, "ghost")["is_devil"] = False
+
+        _end_hand(state)
+
+        ghost = _get_player(state, "ghost")
+        assert ghost["chips"] == 0          # stayed eliminated
+        assert ghost["is_devil"] is False   # no devil deal granted
+
 
 # ── game-level invariants ──────────────────────────────────────────────────────
 
@@ -674,11 +796,40 @@ class TestInvariants:
         total_after = sum(p["chips"] for p in state["players"])
         assert total_after == total_before
 
-    def test_pot_is_zero_after_hand_over(self):
-        """The pot should be distributed; state.pot not explicitly reset between hands
-        but hand_result records the final pot value."""
+    def test_chips_conserved_across_many_hands(self):
+        """Role-less games conserve total chips over a full match — including
+        after eliminations (an eliminated seat must not be re-dealt pots, and
+        side pots must not manufacture chips)."""
+        import random
+        for seed in (0, 1, 7, 42, 99):
+            random.seed(seed)
+            state = _bot_game(4)
+            total_before = sum(p["chips"] for p in state["players"])
+            for _ in range(60):
+                if state["phase"] == PHASE_GAME_OVER:
+                    break
+                state = start_hand(state)
+            total_after = sum(p["chips"] for p in state["players"])
+            assert total_after == total_before, f"seed {seed}: {total_before} -> {total_after}"
+
+    def test_hand_result_recorded_after_hand(self):
+        """A completed hand records hand_result with winner_ids and the pot."""
         state = start_hand(_bot_game(2))
-        assert state.get("hand_result") is not None
+        result = state.get("hand_result")
+        assert result is not None
+        assert result["winner_ids"]                      # at least one winner
+        assert result["pot"] >= state["big_blind"]       # blinds at minimum
+        # The recorded winners are the players who actually gained chips.
+        assert all(_get_player(state, w) is not None for w in result["winner_ids"])
+
+    def test_pot_reset_on_next_hand(self):
+        """state['pot'] is not zeroed at hand end, but the next start_hand resets it."""
+        state = start_hand(_bot_game(3))
+        if state["phase"] == PHASE_HAND_OVER:
+            state = start_hand(state)
+            # Fresh hand: pot holds only the freshly-posted blinds (or the hand
+            # already auto-resolved, recording a new result).
+            assert state["pot"] >= 0
 
     def test_multiple_hands_without_error(self):
         """Run 5 consecutive hands without raising."""

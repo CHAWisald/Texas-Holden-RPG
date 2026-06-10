@@ -18,6 +18,16 @@ from .cheat_system import (
 )
 
 
+# ── Errors ─────────────────────────────────────────────────────────────────────
+
+class IllegalMove(ValueError):
+    """Raised for client-supplied illegal moves (wrong phase, out of turn,
+    illegal action, …). Subclasses ValueError so existing callers/tests that
+    catch ValueError still work, but lets the API layer map *only* these to
+    HTTP 400 — genuine internal errors surface as 500 instead of being masked.
+    """
+
+
 # ── Phases ─────────────────────────────────────────────────────────────────────
 
 PHASE_WAITING    = "WAITING"
@@ -78,6 +88,7 @@ def _new_player(pid: str, name: str, is_human: bool,
         "chips": chips,
         "hole_cards": [],
         "street_bet": 0,
+        "total_bet": 0,           # chips committed this hand (all streets)
         "folded": False,
         "all_in": False,
         "is_human": is_human,
@@ -118,8 +129,9 @@ def _still_in(state: dict) -> list:
 
 def _place_bet(state: dict, p: dict, amount: int) -> int:
     amount = min(amount, p["chips"])
-    p["chips"]     -= amount
+    p["chips"]      -= amount
     p["street_bet"] += amount
+    p["total_bet"]  += amount
     state["pot"]    += amount
     if p["chips"] == 0:
         p["all_in"] = True
@@ -137,6 +149,19 @@ def _fold_dead_players(state: dict):
         if p["chips"] == 0 and not p["folded"] and not p["all_in"]:
             p["folded"] = True
             _emit(state, "dead_fold", player_id=p["id"])
+
+
+def _live_to_act(state: dict, order: list, exclude_id: Optional[str] = None) -> list:
+    """Player ids from `order` that still owe action: not folded, not all-in,
+    and not `exclude_id` (the player who just raised)."""
+    out = []
+    for pid in order:
+        if pid == exclude_id:
+            continue
+        q = _get_player(state, pid)
+        if q and not q["folded"] and not q["all_in"]:
+            out.append(pid)
+    return out
 
 
 # ── Bot decision helpers ───────────────────────────────────────────────────────
@@ -302,66 +327,40 @@ def _draw_junk_from_deck(deck: list, avoid_rank: int) -> Optional[dict]:
     return random.choice(candidates) if candidates else None
 
 
-def _apply_devil_hand(state: dict, p: dict):
-    """70% chance devil tampers with the in-devil-state player's hole cards."""
-    if random.random() > 0.70:
+def _tamper_hand(state: dict, p: dict, event_type: str, gated: bool):
+    """
+    Downgrade or swap one of a player's hole cards (devil / curse effect).
+
+    gated=True applies the 70% trigger chance used for the passive devil state.
+    gated=False always tampers — an *active* curse fires every hand, matching
+    the original RoleSystem.apply_victim_curse (which had no trigger gate).
+    """
+    if gated and random.random() > 0.70:
         return
     hole = p["hole_cards"]
     if len(hole) < 2:
         return
 
     if random.random() < 0.50:
-        # Downgrade: break pair or replace high card with junk
+        # Downgrade: break a pair, otherwise replace the higher card with junk.
         if hole[0]["rank"] == hole[1]["rank"]:
-            junk = _draw_junk_from_deck(state["deck"], avoid_rank=hole[0]["rank"])
-            idx  = 0
+            idx = 0
         else:
-            idx  = 0 if hole[0]["rank"] > hole[1]["rank"] else 1
-            junk = _draw_junk_from_deck(state["deck"], avoid_rank=hole[idx]["rank"])
-        if junk:
-            old = hole[idx]
-            hole[idx] = junk
-            _remove_from_deck(state, [junk])
-            state["deck"].append(old)
-            _emit(state, "devil_tamper", player_id=p["id"], subtype="downgrade")
+            idx = 0 if hole[0]["rank"] > hole[1]["rank"] else 1
+        junk    = _draw_junk_from_deck(state["deck"], avoid_rank=hole[idx]["rank"])
+        subtype = "downgrade"
     else:
-        # Swap one random card
-        idx  = random.randint(0, len(hole) - 1)
-        junk = _draw_junk_from_deck(state["deck"], avoid_rank=hole[idx]["rank"])
-        if junk:
-            old = hole[idx]
-            hole[idx] = junk
-            _remove_from_deck(state, [junk])
-            state["deck"].append(old)
-            _emit(state, "devil_tamper", player_id=p["id"], subtype="swap")
+        # Swap one random card.
+        idx     = random.randint(0, len(hole) - 1)
+        junk    = _draw_junk_from_deck(state["deck"], avoid_rank=hole[idx]["rank"])
+        subtype = "swap"
 
-
-def _apply_victim_curse(state: dict, p: dict):
-    """Same tampering logic applied to a cursed victim each hand."""
-    if random.random() > 0.70:
-        return
-    hole = p["hole_cards"]
-    if len(hole) < 2:
-        return
-
-    if random.random() < 0.50:
-        idx  = 0 if hole[0]["rank"] > hole[1]["rank"] else 1
-        junk = _draw_junk_from_deck(state["deck"], avoid_rank=hole[idx]["rank"])
-        if junk:
-            old = hole[idx]
-            hole[idx] = junk
-            _remove_from_deck(state, [junk])
-            state["deck"].append(old)
-            _emit(state, "curse_tamper", player_id=p["id"], subtype="downgrade")
-    else:
-        idx  = random.randint(0, len(hole) - 1)
-        junk = _draw_junk_from_deck(state["deck"], avoid_rank=hole[idx]["rank"])
-        if junk:
-            old = hole[idx]
-            hole[idx] = junk
-            _remove_from_deck(state, [junk])
-            state["deck"].append(old)
-            _emit(state, "curse_tamper", player_id=p["id"], subtype="swap")
+    if junk:
+        old = hole[idx]
+        hole[idx] = junk
+        _remove_from_deck(state, [junk])
+        state["deck"].append(old)
+        _emit(state, event_type, player_id=p["id"], subtype=subtype)
 
 
 def _fire_revolver(p: dict) -> bool:
@@ -432,10 +431,32 @@ def _handle_bust(state: dict, p: dict) -> bool:
 # ── Ability actions ────────────────────────────────────────────────────────────
 
 def _do_shoot(state: dict, shooter: dict, target_id: Optional[str]):
-    bb           = state["big_blind"]
+    bb = state["big_blind"]
+
+    if target_id is None:
+        # Self-shoot: free (no chip cost). CLICK → gain 20BB and survive;
+        # BANG → eliminated. Lets a broke Gunner gamble for chips.
+        shooter["bullets_used"] = shooter.get("bullets_used", 0) + 1
+        if _fire_revolver(shooter):
+            shooter["died_by_revolver"] = True
+            shooter["chips"] = 0
+            _emit(state, "revolver_bang", player_id=shooter["id"])
+        else:
+            revival = bb * 20
+            shooter["chips"] += revival
+            _emit(state, "revolver_click", player_id=shooter["id"],
+                  chips_gained=revival)
+        return
+
+    # Shooting an opponent costs chips (doubles per shot).
+    target = _get_player(state, target_id)
+    if target is None or target["chips"] <= 0:
+        _emit(state, "ability_failed", player_id=shooter["id"],
+              reason="invalid_target", target_id=target_id)
+        return
+
     bullets_used = shooter.get("bullets_used", 0)
     cost         = bb * 10 * (2 ** bullets_used)
-
     if shooter["chips"] < cost:
         _emit(state, "ability_failed", player_id=shooter["id"],
               reason="insufficient_chips", cost_needed=cost)
@@ -443,20 +464,6 @@ def _do_shoot(state: dict, shooter: dict, target_id: Optional[str]):
 
     shooter["chips"]       -= cost
     shooter["bullets_used"] = bullets_used + 1
-
-    if target_id is None:
-        # Self-shoot
-        if _fire_revolver(shooter):
-            shooter["died_by_revolver"] = True
-            shooter["chips"] = 0
-            _emit(state, "revolver_bang", player_id=shooter["id"])
-        else:
-            _emit(state, "revolver_click", player_id=shooter["id"])
-        return
-
-    target = _get_player(state, target_id)
-    if target is None or target["chips"] <= 0:
-        return
 
     if _lucky_immune(target):
         _emit(state, "lucky_immune", target_id=target_id, effect="shot")
@@ -521,20 +528,30 @@ def _maybe_bluff_reward(state: dict, winner: dict):
 
 # ── Action logic ───────────────────────────────────────────────────────────────
 
+_VALID_ACTIONS = {"fold", "check", "call", "raise", "all-in"}
+
+
+def _validate_action(state: dict, p: dict, action: str):
+    """Reject illegal actions *before* any state is mutated, so a rejected
+    request never leaves the game half-advanced."""
+    if action not in _VALID_ACTIONS:
+        raise IllegalMove(f"Unknown action: {action!r}")
+    if action == "check" and state["current_bet"] - p["street_bet"] > 0:
+        to_call = state["current_bet"] - p["street_bet"]
+        raise IllegalMove(
+            f"Cannot check — {p['name']} must call {to_call} chips, raise, or fold"
+        )
+
+
 def _do_action(state: dict, p: dict, action: str, amount: int):
     current_bet = state["current_bet"]
     to_call     = current_bet - p["street_bet"]
-    min_raise   = state["min_raise"]
 
     if action == "fold":
         p["folded"] = True
         _emit(state, "fold", player_id=p["id"])
 
     elif action == "check":
-        if to_call > 0:
-            raise ValueError(
-                f"Cannot check — {p['name']} must call {to_call} chips, raise, or fold"
-            )
         _emit(state, "check", player_id=p["id"])
 
     elif action == "call":
@@ -551,16 +568,17 @@ def _do_action(state: dict, p: dict, action: str, amount: int):
             state["min_raise"]   = state["big_blind"]   # always 1BB
             state["current_bet"] = new_bet
             # Re-queue everyone else in original street order
-            state["to_act"] = [
-                pid for pid in state["street_player_order"]
-                if pid != p["id"]
-                and not _get_player(state, pid)["folded"]
-                and not _get_player(state, pid)["all_in"]
-            ]
+            state["to_act"] = _live_to_act(
+                state, state["street_player_order"], exclude_id=p["id"])
             _emit(state, "raise", player_id=p["id"],
                   amount=new_bet, pot=state["pot"])
-        else:
+        elif p["all_in"]:
+            # Couldn't reach the current bet — this is an all-in (short) call.
             _emit(state, "all_in", player_id=p["id"],
+                  amount=actual, pot=state["pot"])
+        else:
+            # Sub-minimum "raise" that didn't exceed the bet: it's just a call.
+            _emit(state, "call", player_id=p["id"],
                   amount=actual, pot=state["pot"])
 
     elif action == "all-in":
@@ -569,17 +587,10 @@ def _do_action(state: dict, p: dict, action: str, amount: int):
         if new_bet > current_bet:
             state["current_bet"] = new_bet
             state["min_raise"]   = state["big_blind"]   # always 1BB
-            state["to_act"] = [
-                pid for pid in state["street_player_order"]
-                if pid != p["id"]
-                and not _get_player(state, pid)["folded"]
-                and not _get_player(state, pid)["all_in"]
-            ]
+            state["to_act"] = _live_to_act(
+                state, state["street_player_order"], exclude_id=p["id"])
         _emit(state, "all_in", player_id=p["id"],
               amount=new_bet, pot=state["pot"])
-
-    else:
-        raise ValueError(f"Unknown action: {action!r}")
 
 
 # ── Internal phase transitions ─────────────────────────────────────────────────
@@ -667,9 +678,14 @@ def _resolve_and_deal(state: dict) -> dict:
         for p in active:
             p["hole_cards"] = _deal_n(state, 2)
     else:
+        # Reserve the dealer's cheat cards from the *full* deck first, so other
+        # players' random draws can't exhaust the requested rank and leave the
+        # dealer with fewer than two cards.
+        if cheated:
+            dealer["hole_cards"] = _deal_cheat_hand(state, state["chosen_hand"])
         for p in active:
             if cheated and p["id"] == dealer["id"]:
-                p["hole_cards"] = _deal_cheat_hand(state, state["chosen_hand"])
+                continue   # already dealt above
             elif p.get("role") == "LUCKY":
                 p["hole_cards"] = _lucky_deal(state, p)
             else:
@@ -677,9 +693,9 @@ def _resolve_and_deal(state: dict) -> dict:
 
     for p in active:
         if p.get("is_devil"):
-            _apply_devil_hand(state, p)
+            _tamper_hand(state, p, "devil_tamper", gated=True)
         if p.get("curse_hands_left", 0) > 0:
-            _apply_victim_curse(state, p)
+            _tamper_hand(state, p, "curse_tamper", gated=False)
             p["curse_hands_left"] -= 1
 
     _emit(state, "dealt")
@@ -692,11 +708,7 @@ def _resolve_and_deal(state: dict) -> dict:
     state["min_raise"]            = state["big_blind"]
     state["phase"]                = PHASE_PREFLOP
     state["street_player_order"]  = preflop
-    state["to_act"]               = [
-        pid for pid in preflop
-        if not _get_player(state, pid)["folded"]
-        and not _get_player(state, pid)["all_in"]
-    ]
+    state["to_act"]               = _live_to_act(state, preflop)
 
     _emit(state, "preflop_start", current_bet=state["current_bet"])
     return _advance_betting(state)
@@ -785,23 +797,19 @@ def _start_postflop(state: dict, phase: str) -> dict:
     dealer_pos = state["dealer_pos"]
     n          = len(active)
 
-    order = [
-        active[(dealer_pos + i) % n]["id"]
-        for i in range(1, n + 1)
-        if not active[(dealer_pos + i) % n]["folded"]
-        and not active[(dealer_pos + i) % n]["all_in"]
-    ]
+    # Full post-flop seat order (dealer acts last); to_act filters live players.
+    order = [active[(dealer_pos + i) % n]["id"] for i in range(1, n + 1)]
 
     state["phase"]               = phase
     state["current_bet"]         = 0
     state["min_raise"]           = state["big_blind"]
     state["street_player_order"] = order
-    state["to_act"]              = list(order)
+    state["to_act"]              = _live_to_act(state, order)
 
     _emit(state, "street_start", phase=phase,
           community_cards=state["community_cards"])
 
-    if not order:
+    if not state["to_act"]:
         return _end_street(state)   # all remaining are all-in
 
     return _advance_betting(state)
@@ -821,9 +829,13 @@ def _end_hand(state: dict) -> dict:
     else:
         _showdown(state)
 
-    # Handle newly busted players
-    for p in state["players"]:
-        if p["chips"] == 0:
+    # Handle newly busted players — only those who actually played this hand.
+    # Players eliminated in an earlier hand are not in hand_active_ids, so they
+    # are never re-revived (which previously resurrected busted CURSED players
+    # with a fresh devil loan every hand).
+    for pid in state["hand_active_ids"]:
+        p = _get_player(state, pid)
+        if p and p["chips"] == 0:
             _handle_bust(state, p)
 
     # Advance dealer
@@ -839,33 +851,85 @@ def _end_hand(state: dict) -> dict:
     return state
 
 
-def _showdown(state: dict) -> dict:
-    remaining = _still_in(state)
-    board     = [_d2c(c) for c in state["community_cards"]]
+def _distribute_side_pots(state: dict, scores: dict) -> dict:
+    """
+    Split the pot into side pots by each player's total contribution and award
+    each layer to the best eligible (non-folded) hand. Returns {pid: chips_won}.
 
-    results = []
-    for p in remaining:
+    `scores` maps each non-folded player's id to its HandEvaluator score tuple.
+    Folded players still forfeit their contribution to the layers they funded;
+    chips nobody could call (an uncalled over-bet) are refunded to the bettor.
+    """
+    winnings = {p["id"]: 0 for p in state["players"]}
+    contributors = [p for p in state["players"] if p.get("total_bet", 0) > 0]
+
+    # Fallback for states with no per-player contribution recorded
+    # (e.g. unit tests that set state["pot"] directly): simple split.
+    if not contributors:
+        eligible = [p for p in _still_in(state) if p["id"] in scores]
+        if not eligible:
+            return winnings
+        best    = max(scores[p["id"]] for p in eligible)
+        winners = [p for p in eligible if scores[p["id"]] == best]
+        share, rem = divmod(state["pot"], len(winners))
+        for w in winners:
+            winnings[w["id"]] += share
+        winnings[winners[0]["id"]] += rem
+        return winnings
+
+    prev = 0
+    for level in sorted({p["total_bet"] for p in contributors}):
+        layer_contributors = [p for p in contributors if p["total_bet"] >= level]
+        amount = (level - prev) * len(layer_contributors)
+        prev   = level
+        if amount <= 0:
+            continue
+
+        eligible = [p for p in layer_contributors
+                    if not p["folded"] and p["id"] in scores]
+        if not eligible:
+            # Uncalled chips at this level — refund to whoever put them in.
+            share, rem = divmod(amount, len(layer_contributors))
+            for c in layer_contributors:
+                winnings[c["id"]] += share
+            winnings[layer_contributors[0]["id"]] += rem
+            continue
+
+        best    = max(scores[p["id"]] for p in eligible)
+        winners = [p for p in eligible if scores[p["id"]] == best]
+        share, rem = divmod(amount, len(winners))
+        for w in winners:
+            winnings[w["id"]] += share
+        winnings[winners[0]["id"]] += rem
+
+    return winnings
+
+
+def _showdown(state: dict) -> dict:
+    board = [_d2c(c) for c in state["community_cards"]]
+
+    scores    = {}
+    all_hands = {}
+    for p in _still_in(state):
         hole = [_d2c(c) for c in p["hole_cards"]]
         score, hand_name = HandEvaluator.best_hand(hole + board)
-        results.append((score, p, hand_name))
+        scores[p["id"]]    = score
+        all_hands[p["id"]] = hand_name
 
-    best   = max(r[0] for r in results)
-    winners = [(p, hn) for score, p, hn in results if score == best]
+    winnings = _distribute_side_pots(state, scores)
+    for p in state["players"]:
+        if winnings.get(p["id"]):
+            p["chips"] += winnings[p["id"]]
 
-    share     = state["pot"] // len(winners)
-    remainder = state["pot"] %  len(winners)
-    for w, _ in winners:
-        w["chips"] += share
-    winners[0][0]["chips"] += remainder
-
-    winner_ids = [w["id"] for w, _ in winners]
-    all_hands  = {p["id"]: hn for _, p, hn in results}
+    # Winners = players who took a contested (showdown) pot, not refunds.
+    winner_ids = [pid for pid in scores if winnings.get(pid, 0) > 0]
 
     state["hand_result"] = {
         "type":       "showdown",
         "winner_ids": winner_ids,
         "pot":        state["pot"],
         "all_hands":  all_hands,
+        "winnings":   {pid: amt for pid, amt in winnings.items() if amt > 0},
     }
     _emit(state, "showdown", winner_ids=winner_ids,
           pot=state["pot"], all_hands=all_hands)
@@ -932,7 +996,7 @@ def start_hand(state: dict) -> dict:
     HAND_OVER (if hand resolved immediately), or GAME_OVER.
     """
     if state["phase"] not in (PHASE_WAITING, PHASE_HAND_OVER):
-        raise ValueError(f"Cannot start hand in phase {state['phase']!r}")
+        raise IllegalMove(f"Cannot start hand in phase {state['phase']!r}")
 
     state["events"] = []
 
@@ -959,11 +1023,16 @@ def start_hand(state: dict) -> dict:
     state["to_act"]           = []
     state["street_player_order"] = []
 
-    for p in active:
-        p["hole_cards"]  = []
-        p["street_bet"]  = 0
-        p["folded"]      = False
-        p["all_in"]      = False
+    # Reset every player. Eliminated players (not in this hand) are marked
+    # folded with no contribution so showdown / side-pot logic never counts
+    # their stale hole cards or total_bet.
+    active_ids = {p["id"] for p in active}
+    for p in state["players"]:
+        p["hole_cards"] = []
+        p["street_bet"] = 0
+        p["total_bet"]  = 0
+        p["all_in"]     = False
+        p["folded"]     = p["id"] not in active_ids
 
     n          = len(active)
     dealer_pos = state["dealer_idx"] % n
@@ -1017,17 +1086,17 @@ def apply_shuffle_decision(state: dict, dealer_id: str,
     chosen_hand must be a key from CHEAT_HAND_OPTIONS when cheated=True.
     """
     if state["phase"] != PHASE_SHUFFLE:
-        raise ValueError(f"Not in shuffle phase (current: {state['phase']!r})")
+        raise IllegalMove(f"Not in shuffle phase (current: {state['phase']!r})")
 
     active     = [_get_player(state, pid) for pid in state["hand_active_ids"]]
     dealer_pos = state["dealer_pos"]
     dealer     = active[dealer_pos]
 
     if dealer["id"] != dealer_id:
-        raise ValueError(f"{dealer_id!r} is not the dealer")
+        raise IllegalMove(f"{dealer_id!r} is not the dealer")
 
     if cheated and chosen_hand not in CHEAT_HANDS:
-        raise ValueError(f"Unknown cheat hand {chosen_hand!r}")
+        raise IllegalMove(f"Unknown cheat hand {chosen_hand!r}")
 
     state["events"] = []
 
@@ -1044,10 +1113,10 @@ def apply_accusation(state: dict, player_id: str, accuses: bool) -> dict:
     When all pending humans have decided, resolves and deals automatically.
     """
     if state["phase"] != PHASE_ACCUSATION:
-        raise ValueError(f"Not in accusation phase (current: {state['phase']!r})")
+        raise IllegalMove(f"Not in accusation phase (current: {state['phase']!r})")
 
     if not state["accusation_order"] or state["accusation_order"][0] != player_id:
-        raise ValueError(f"Not {player_id!r}'s turn to accuse")
+        raise IllegalMove(f"Not {player_id!r}'s turn to accuse")
 
     state["events"] = []
     state["accusation_order"].pop(0)
@@ -1056,7 +1125,7 @@ def apply_accusation(state: dict, player_id: str, accuses: bool) -> dict:
         cost = 2 * state["big_blind"]
         p    = _get_player(state, player_id)
         if p["chips"] < cost:
-            raise ValueError(f"Insufficient chips to accuse (need {cost})")
+            raise IllegalMove(f"Insufficient chips to accuse (need {cost})")
         p["chips"]        -= cost
         state["accusers"]  = [player_id]
         _emit(state, "human_accused", accuser_id=player_id, cost=cost)
@@ -1078,14 +1147,18 @@ def apply_action(state: dict, player_id: str, action: str,
     Auto-advances bots until the next human turn or phase end.
     """
     if state["phase"] not in BETTING_PHASES:
-        raise ValueError(f"Not in a betting phase (current: {state['phase']!r})")
+        raise IllegalMove(f"Not in a betting phase (current: {state['phase']!r})")
 
     if not state["to_act"] or state["to_act"][0] != player_id:
-        raise ValueError(f"Not {player_id!r}'s turn to act")
+        raise IllegalMove(f"Not {player_id!r}'s turn to act")
 
     p = _get_player(state, player_id)
     if p is None:
-        raise ValueError(f"Player {player_id!r} not found")
+        raise IllegalMove(f"Player {player_id!r} not found")
+
+    # Validate up front so a rejected action never leaves to_act / abilities
+    # half-applied (the caller stores the same dict it passed in).
+    _validate_action(state, p, action)
 
     state["events"] = []
 
@@ -1113,10 +1186,20 @@ def apply_ability(state: dict, player_id: str,
     """
     Use a role ability outside a betting action (e.g., between hands).
     ability_type: "shoot" | "curse"
+
+    Not allowed during a betting phase: firing an ability mid-street would kill
+    a player without reconciling to_act / re-advancing the round, deadlocking
+    the hand or bypassing turn order. During betting, use apply_action with
+    use_ability_first=True instead.
     """
+    if state["phase"] in BETTING_PHASES:
+        raise IllegalMove(
+            "Cannot use /ability during betting — pass use_ability_first=True "
+            "on your action instead")
+
     p = _get_player(state, player_id)
     if p is None:
-        raise ValueError(f"Player {player_id!r} not found")
+        raise IllegalMove(f"Player {player_id!r} not found")
 
     state["events"] = []
 
@@ -1125,7 +1208,7 @@ def apply_ability(state: dict, player_id: str,
     elif ability_type == "curse" and p.get("role") == "CURSED":
         _do_curse(state, p, target_id)
     else:
-        raise ValueError(
+        raise IllegalMove(
             f"Player {player_id!r} cannot use ability {ability_type!r}")
 
     _fold_dead_players(state)

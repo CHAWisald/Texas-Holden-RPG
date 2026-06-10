@@ -5,6 +5,7 @@ Run with:  fastapi dev main.py
 Docs at:   http://127.0.0.1:8000/docs
 """
 
+import threading
 import uuid
 from typing import Optional
 
@@ -18,6 +19,7 @@ from game.engine import (
     apply_accusation,
     apply_action,
     apply_ability,
+    IllegalMove,
 )
 from game.cheat_system import CHEAT_HAND_OPTIONS, CHEAT_HANDS
 
@@ -33,6 +35,17 @@ app = FastAPI(
 # ── In-memory store ────────────────────────────────────────────────────────────
 # Maps game_id (str) → game state (dict).
 games: dict[str, dict] = {}
+
+# Per-game locks. FastAPI runs these sync endpoints in a threadpool, so two
+# requests for the same game could otherwise interleave their in-place mutations
+# of the shared state dict. Each mutating endpoint serialises on the game's lock.
+_locks_guard: threading.Lock = threading.Lock()
+_game_locks: dict[str, threading.Lock] = {}
+
+
+def _lock_for(game_id: str) -> threading.Lock:
+    with _locks_guard:
+        return _game_locks.setdefault(game_id, threading.Lock())
 
 
 # ── Request models ─────────────────────────────────────────────────────────────
@@ -129,12 +142,13 @@ def do_start_hand(game_id: str):
     SHUFFLE_PHASE, ACCUSATION_PHASE, a *_BETTING phase,
     or HAND_OVER / GAME_OVER if the hand resolved immediately.
     """
-    state = _get_or_404(game_id)
-    try:
-        games[game_id] = start_hand(state)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return games[game_id]
+    with _lock_for(game_id):
+        state = _get_or_404(game_id)
+        try:
+            games[game_id] = start_hand(state)
+        except IllegalMove as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return games[game_id]
 
 
 # ── Cheat / accusation phase ───────────────────────────────────────────────────
@@ -149,14 +163,15 @@ def do_shuffle(game_id: str, req: ShuffleRequest):
     Returns state at ACCUSATION_PHASE (if a human needs to decide) or
     directly at PREFLOP_BETTING.
     """
-    state = _get_or_404(game_id)
-    try:
-        games[game_id] = apply_shuffle_decision(
-            state, req.dealer_id, req.cheated, req.chosen_hand
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return games[game_id]
+    with _lock_for(game_id):
+        state = _get_or_404(game_id)
+        try:
+            games[game_id] = apply_shuffle_decision(
+                state, req.dealer_id, req.cheated, req.chosen_hand
+            )
+        except IllegalMove as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return games[game_id]
 
 
 @app.post("/games/{game_id}/accuse", summary="Player decides whether to accuse the dealer")
@@ -167,12 +182,13 @@ def do_accuse(game_id: str, req: AccusationRequest):
     Costs 2×BB if accuses=true and the dealer is honest (false accusation).
     After all humans have decided, resolution and dealing happen automatically.
     """
-    state = _get_or_404(game_id)
-    try:
-        games[game_id] = apply_accusation(state, req.player_id, req.accuses)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return games[game_id]
+    with _lock_for(game_id):
+        state = _get_or_404(game_id)
+        try:
+            games[game_id] = apply_accusation(state, req.player_id, req.accuses)
+        except IllegalMove as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return games[game_id]
 
 
 # ── Betting ────────────────────────────────────────────────────────────────────
@@ -194,19 +210,20 @@ def do_action(game_id: str, req: ActionRequest):
     Provide ability_target_id to name a shoot/curse target (omit for auto-pick).
     Bots auto-advance after this action until the next human turn or phase end.
     """
-    state = _get_or_404(game_id)
-    try:
-        games[game_id] = apply_action(
-            state,
-            req.player_id,
-            req.action,
-            req.amount,
-            req.use_ability_first,
-            req.ability_target_id,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return games[game_id]
+    with _lock_for(game_id):
+        state = _get_or_404(game_id)
+        try:
+            games[game_id] = apply_action(
+                state,
+                req.player_id,
+                req.action,
+                req.amount,
+                req.use_ability_first,
+                req.ability_target_id,
+            )
+        except IllegalMove as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return games[game_id]
 
 
 # ── Role abilities (between hands) ────────────────────────────────────────────
@@ -216,13 +233,15 @@ def do_ability(game_id: str, req: AbilityRequest):
     """
     For Gunner: ability_type="shoot", target_id=opponent's player id (or null to self-shoot).
     For Cursed: ability_type="curse", target_id=opponent's player id (or null to auto-pick).
-    Can be called in any phase (typically HAND_OVER for between-hand use).
+    Valid in any non-betting phase (typically HAND_OVER for between-hand use).
+    During betting, pass use_ability_first=true on /action instead.
     """
-    state = _get_or_404(game_id)
-    try:
-        games[game_id] = apply_ability(
-            state, req.player_id, req.ability_type, req.target_id
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc))
-    return games[game_id]
+    with _lock_for(game_id):
+        state = _get_or_404(game_id)
+        try:
+            games[game_id] = apply_ability(
+                state, req.player_id, req.ability_type, req.target_id
+            )
+        except IllegalMove as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return games[game_id]
