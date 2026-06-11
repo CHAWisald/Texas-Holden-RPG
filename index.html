@@ -11,6 +11,97 @@
     #game-id { font-family: monospace; }
     #error { color: #b00020; white-space: pre-wrap; }
     pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; border-radius: 4px; }
+
+    /* ── Poker table ─────────────────────────────────────────────── */
+    #table {
+      position: relative;   /* anchor for the absolutely-positioned seats */
+      background: radial-gradient(ellipse at center, #2e7d4f, #1d5c38);
+      border: 8px solid #5a3a22;
+      border-radius: 120px;
+      padding: 4rem 1.5rem; /* room so seats don't cover the board/pot */
+      margin: 2rem 0;
+      text-align: center;
+      color: #fff;
+    }
+    #phase-label {
+      font-size: 0.95rem;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      font-weight: bold;
+      margin-bottom: 0.75rem;
+    }
+    #community {
+      display: flex;
+      gap: 0.5rem;
+      justify-content: center;
+    }
+    #pot { margin-top: 0.75rem; font-size: 1.1rem; font-weight: bold; }
+
+    /* ── Seats ───────────────────────────────────────────────────── */
+    /* #seats spans the whole table; each seat is absolutely placed on
+       an ellipse along the table's edge by renderSeats(). */
+    #seats { position: absolute; inset: 0; }
+    .seat {
+      position: absolute;
+      transform: translate(-50%, -50%);  /* centre the box on its point */
+      min-width: 5.5rem;
+      padding: 0.3rem 0.6rem;
+      background: rgba(0, 0, 0, 0.55);
+      border: 2px solid rgba(255, 255, 255, 0.25);
+      border-radius: 10px;
+      font-size: 0.85rem;
+      text-align: center;
+    }
+    .seat .seat-name { font-weight: bold; }
+    .seat .seat-chips { opacity: 0.85; }
+    /* The human's seat: gold border + "(you)" tag. */
+    .seat.me { border-color: #ffd54f; background: rgba(0, 0, 0, 0.8); }
+    .seat.me .seat-name::after { content: " (you)"; font-weight: normal; opacity: 0.8; }
+
+    /* Hole cards shown inside the human's seat: smaller than board cards. */
+    .seat .hole-cards {
+      display: flex;
+      gap: 0.3rem;
+      justify-content: center;
+      margin-bottom: 0.3rem;
+    }
+    .seat .card { width: 2.3rem; height: 3.3rem; padding: 0.2rem 0.3rem; }
+    .seat .card .rank { font-size: 0.9rem; }
+    .seat .card .suit { font-size: 1.2rem; }
+
+    /* Whose turn it is: green glow. Declared after .me so the glow wins
+       when it's the human's own turn. */
+    .seat.active {
+      border-color: #7ef0a0;
+      box-shadow: 0 0 14px 4px rgba(126, 240, 160, 0.75);
+    }
+
+    /* ── Cards ───────────────────────────────────────────────────── */
+    /* A card is a small white rounded box: rank in the top-left
+       corner, a large suit symbol in the bottom-right. */
+    .card {
+      display: inline-flex;
+      flex-direction: column;
+      justify-content: space-between;
+      width: 3rem;
+      height: 4.2rem;
+      background: #fff;
+      color: #1a1a1a;
+      border: 1px solid #999;
+      border-radius: 6px;
+      padding: 0.25rem 0.35rem;
+      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+      font-weight: bold;
+    }
+    .card .rank { font-size: 1.05rem; line-height: 1; align-self: flex-start; }
+    .card .suit { font-size: 1.5rem;  line-height: 1; align-self: flex-end; }
+    .card.red { color: #c0202a; }
+    /* Empty community slot: dashed outline where a card will appear. */
+    .card.slot {
+      background: rgba(255, 255, 255, 0.08);
+      border: 1px dashed rgba(255, 255, 255, 0.45);
+      box-shadow: none;
+    }
   </style>
 </head>
 <body>
@@ -53,7 +144,22 @@
 
   <p>Game ID: <span id="game-id">(none yet)</span></p>
   <p id="error"></p>
-  <pre id="state">No state loaded.</pre>
+
+  <!-- Visual game display. renderTable() fills this from the same state
+       object the buttons fetch; nothing here talks to the backend. -->
+  <div id="table">
+    <div id="seats"></div>
+    <div id="phase-label">No game yet</div>
+    <div id="community"></div>
+    <div id="pot">Pot: —</div>
+  </div>
+
+  <!-- Raw state, kept for debugging until the UI shows everything
+       (hole cards, chips, ...). Safe to delete later. -->
+  <details>
+    <summary>Raw state (debug)</summary>
+    <pre id="state">No state loaded.</pre>
+  </details>
 
   <script>
     // Base URL of the FastAPI backend. Change here if the port changes.
@@ -80,6 +186,10 @@
     const gameIdEl   = document.getElementById("game-id");
     const errorEl    = document.getElementById("error");
     const stateEl    = document.getElementById("state");
+    const phaseEl    = document.getElementById("phase-label");
+    const communityEl = document.getElementById("community");
+    const potEl      = document.getElementById("pot");
+    const seatsEl    = document.getElementById("seats");
 
     // Default lineup sent to POST /games. The backend requires a players
     // list (see CreateGameRequest in main.py), so we hard-code one human
@@ -113,13 +223,123 @@
       return resp.json();
     }
 
-    // Pretty-print a state object into the <pre> block and re-gate the
-    // phase controls to match it.
+    // ── Card rendering ─────────────────────────────────────────────
+    // The engine sends cards as {"rank": 2–14, "suit": "Hearts"|...}.
+    const SUIT_SYMBOLS = { Hearts: "♥", Diamonds: "♦", Clubs: "♣", Spades: "♠" };
+    const RANK_LABELS  = { 11: "J", 12: "Q", 13: "K", 14: "A" };
+
+    // Build one card element: rank top-left, suit symbol bottom-right.
+    function cardEl(card) {
+      const div = document.createElement("div");
+      const red = card.suit === "Hearts" || card.suit === "Diamonds";
+      div.className = "card" + (red ? " red" : "");
+
+      const rank = document.createElement("span");
+      rank.className = "rank";
+      rank.textContent = RANK_LABELS[card.rank] || String(card.rank);
+
+      const suit = document.createElement("span");
+      suit.className = "suit";
+      suit.textContent = SUIT_SYMBOLS[card.suit] || card.suit;
+
+      div.append(rank, suit);
+      return div;
+    }
+
+    // Dashed placeholder for a community card not yet dealt.
+    function slotEl() {
+      const div = document.createElement("div");
+      div.className = "card slot";
+      return div;
+    }
+
+    // Which player must act right now; null when nobody is on the clock
+    // (WAITING, HAND_OVER, GAME_OVER).
+    function activePlayerId(state) {
+      if (!state) return null;
+      if (state.phase === "SHUFFLE_PHASE")
+        return state.hand_active_ids[state.dealer_pos];
+      if (state.phase === "ACCUSATION_PHASE")
+        return state.accusation_order[0];
+      if (state.phase.endsWith("_BETTING"))
+        return state.to_act[0];
+      return null;
+    }
+
+    // Redraw the table area from a state object (null = no game yet).
+    function renderTable(state) {
+      let status = "No game yet";
+      if (state) {
+        status = state.phase.replaceAll("_", " ");
+        const actor = state.players.find(p => p.id === activePlayerId(state));
+        if (actor) status += actor.is_human ? " — your turn" : ` — ${actor.name}'s turn`;
+      }
+      phaseEl.textContent = status;
+      potEl.textContent   = state ? `Pot: ${state.pot}` : "Pot: —";
+
+      const cards = state ? state.community_cards : [];
+      communityEl.replaceChildren(...cards.map(cardEl));
+      for (let i = cards.length; i < 5; i++) {
+        communityEl.appendChild(slotEl());
+      }
+    }
+
+    // ── Seat rendering ─────────────────────────────────────────────
+    // Build one seat box: player name + chip stack. The human's seat
+    // gets the .me class (gold border, "(you)" tag via CSS).
+    function seatEl(player, i, n, activeId) {
+      const div = document.createElement("div");
+      div.className = "seat"
+        + (player.is_human ? " me" : "")
+        + (player.id === activeId ? " active" : "");
+
+      // Place seat i on an ellipse along the table edge: seat 0 sits at
+      // the bottom centre, the rest follow evenly spaced clockwise.
+      // left/top are percentages of the table, so the layout scales.
+      const angle = Math.PI / 2 + (2 * Math.PI * i) / n;
+      div.style.left = `${50 + 44 * Math.cos(angle)}%`;
+      div.style.top  = `${50 + 44 * Math.sin(angle)}%`;
+
+      // The human sees their own hole cards in their seat. (The server
+      // sends everyone's hole_cards, but we only show ours.)
+      if (player.is_human && player.hole_cards.length > 0) {
+        const hole = document.createElement("div");
+        hole.className = "hole-cards";
+        hole.append(...player.hole_cards.map(cardEl));
+        div.appendChild(hole);
+      }
+
+      const name = document.createElement("div");
+      name.className = "seat-name";
+      name.textContent = player.name;
+
+      const chips = document.createElement("div");
+      chips.className = "seat-chips";
+      chips.textContent = `${player.chips} chips`;
+
+      div.append(name, chips);
+      return div;
+    }
+
+    // Redraw every seat from state.players (null = no game yet).
+    function renderSeats(state) {
+      const players  = state ? state.players : [];
+      const activeId = activePlayerId(state);
+      seatsEl.replaceChildren(
+        ...players.map((p, i) => seatEl(p, i, players.length, activeId)));
+    }
+
+    // Render a state object (visual table + raw debug JSON) and re-gate
+    // the phase controls to match it.
     function showState(state) {
       lastState = state;
       stateEl.textContent = JSON.stringify(state, null, 2);
+      renderTable(state);
+      renderSeats(state);
       updateControls();
     }
+
+    renderTable(null);   // draw the empty table on page load
 
     function updateControls() {
       const phase = lastState ? lastState.phase : null;
