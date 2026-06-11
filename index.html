@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Poker — Dev Console</title>
+  <style>
+    /* Minimal styling so the JSON is readable; no functional purpose. */
+    body { font-family: sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+    button { font-size: 1rem; padding: 0.5rem 1rem; margin-right: 0.5rem; cursor: pointer; }
+    button:disabled { cursor: not-allowed; opacity: 0.5; }
+    #game-id { font-family: monospace; }
+    #error { color: #b00020; white-space: pre-wrap; }
+    pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; border-radius: 4px; }
+  </style>
+</head>
+<body>
+  <h1>Poker — Dev Console</h1>
+
+  <p>
+    <button id="new-game-btn">New Game</button>
+    <button id="start-hand-btn" disabled>Start Hand</button>
+    <button id="refresh-btn" disabled>Refresh State</button>
+  </p>
+
+  <!-- Phase controls: each row is enabled only while its phase is active. -->
+  <p>
+    <label>Shuffle:
+      <select id="shuffle-hand">
+        <option value="">honest</option>
+      </select>
+    </label>
+    <button id="shuffle-btn" disabled>Shuffle</button>
+  </p>
+
+  <p>
+    <button id="accuse-btn" disabled>Accuse Dealer</button>
+    <button id="pass-btn" disabled>Pass</button>
+  </p>
+
+  <p>
+    <label>Action:
+      <select id="action-select">
+        <option>fold</option>
+        <option>check</option>
+        <option>call</option>
+        <option>raise</option>
+        <option>all-in</option>
+      </select>
+    </label>
+    <label>Raise by: <input id="action-amount" type="number" value="0" min="0"></label>
+    <button id="action-btn" disabled>Submit Action</button>
+  </p>
+
+  <p>Game ID: <span id="game-id">(none yet)</span></p>
+  <p id="error"></p>
+  <pre id="state">No state loaded.</pre>
+
+  <script>
+    // Base URL of the FastAPI backend. Change here if the port changes.
+    const API = "http://localhost:8000";
+
+    // Client-side state: the current game's id, plus the last state the
+    // server returned — the phase controls read it to know whose turn it
+    // is (dealer_id, accusation_order[0], to_act[0]) and which phase row
+    // to enable. Everything authoritative lives server-side.
+    let gameId = null;
+    let lastState = null;
+
+    // Grab the page elements once so the handlers below stay short.
+    const newGameBtn    = document.getElementById("new-game-btn");
+    const startHandBtn  = document.getElementById("start-hand-btn");
+    const refreshBtn    = document.getElementById("refresh-btn");
+    const shuffleHandEl = document.getElementById("shuffle-hand");
+    const shuffleBtn    = document.getElementById("shuffle-btn");
+    const accuseBtn     = document.getElementById("accuse-btn");
+    const passBtn       = document.getElementById("pass-btn");
+    const actionSelect  = document.getElementById("action-select");
+    const actionAmount  = document.getElementById("action-amount");
+    const actionBtn     = document.getElementById("action-btn");
+    const gameIdEl   = document.getElementById("game-id");
+    const errorEl    = document.getElementById("error");
+    const stateEl    = document.getElementById("state");
+
+    // Default lineup sent to POST /games. The backend requires a players
+    // list (see CreateGameRequest in main.py), so we hard-code one human
+    // plus three bots for now. Later this becomes a setup form.
+    const DEFAULT_PLAYERS = [
+      { id: "human", name: "You",   is_human: true },
+      { id: "bot1",  name: "Tex",   is_human: false, aggression: 0.3 },
+      { id: "bot2",  name: "Doc",   is_human: false, aggression: 0.5 },
+      { id: "bot3",  name: "Wyatt", is_human: false, aggression: 0.8 },
+    ];
+
+    // Shared helper: do a fetch, throw a readable error on any failure,
+    // and parse the JSON response. Both buttons funnel through this.
+    async function api(path, options = {}) {
+      let resp;
+      try {
+        resp = await fetch(API + path, options);
+      } catch (err) {
+        // fetch() only rejects on network-level failures (server down,
+        // CORS blocked, etc.) — HTTP error codes don't land here.
+        throw new Error(
+          `Could not reach ${API}. Is the backend running? ` +
+          `(fastapi dev main.py)  Original error: ${err.message}`
+        );
+      }
+      if (!resp.ok) {
+        // FastAPI puts its error message in a {"detail": ...} body.
+        const body = await resp.text();
+        throw new Error(`HTTP ${resp.status}: ${body}`);
+      }
+      return resp.json();
+    }
+
+    // Pretty-print a state object into the <pre> block and re-gate the
+    // phase controls to match it.
+    function showState(state) {
+      lastState = state;
+      stateEl.textContent = JSON.stringify(state, null, 2);
+      updateControls();
+    }
+
+    function updateControls() {
+      const phase = lastState ? lastState.phase : null;
+      shuffleBtn.disabled = phase !== "SHUFFLE_PHASE";
+      accuseBtn.disabled  = phase !== "ACCUSATION_PHASE";
+      passBtn.disabled    = phase !== "ACCUSATION_PHASE";
+      actionBtn.disabled  = !(phase && phase.endsWith("_BETTING"));
+    }
+
+    // Fill the shuffle <select> with the cheat hands the backend offers.
+    // Called once per New Game; the list is static reference data.
+    async function loadCheatHands() {
+      const hands = await api("/cheat-hands");
+      shuffleHandEl.innerHTML = '<option value="">honest</option>';
+      for (const [key, info] of Object.entries(hands)) {
+        const opt = document.createElement("option");
+        opt.value = key;
+        opt.textContent = `${info.label} (${info.lo}–${info.hi}s)`;
+        shuffleHandEl.appendChild(opt);
+      }
+    }
+
+    newGameBtn.addEventListener("click", async () => {
+      errorEl.textContent = "";
+      try {
+        const state = await api("/games", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            players: DEFAULT_PLAYERS,
+            small_blind: 10,
+            big_blind: 20,
+          }),
+        });
+        // POST /games returns the full initial state with game_id inside it.
+        gameId = state.game_id;
+        gameIdEl.textContent = gameId;
+        startHandBtn.disabled = false; // we have a game to act on now
+        refreshBtn.disabled = false;
+        await loadCheatHands();
+        showState(state);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    });
+
+    startHandBtn.addEventListener("click", async () => {
+      errorEl.textContent = "";
+      try {
+        const state = await api(`/games/${gameId}/start-hand`, { method: "POST" });
+        showState(state);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    });
+
+    refreshBtn.addEventListener("click", async () => {
+      errorEl.textContent = "";
+      try {
+        const state = await api(`/games/${gameId}`);
+        showState(state);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    });
+
+    // SHUFFLE_PHASE only occurs when the human is dealer, so the dealer id
+    // can be read straight from the state. An empty select value means an
+    // honest shuffle; any other value is a cheat-hand key.
+    shuffleBtn.addEventListener("click", async () => {
+      errorEl.textContent = "";
+      try {
+        const hand = shuffleHandEl.value;
+        const state = await api(`/games/${gameId}/shuffle`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            dealer_id: lastState.hand_active_ids[lastState.dealer_pos],
+            cheated: hand !== "",
+            chosen_hand: hand || null,
+          }),
+        });
+        showState(state);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    });
+
+    // ACCUSATION_PHASE pauses with the deciding human at the head of
+    // accusation_order; both buttons send that player's decision.
+    async function sendAccusation(accuses) {
+      errorEl.textContent = "";
+      try {
+        const state = await api(`/games/${gameId}/accuse`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            player_id: lastState.accusation_order[0],
+            accuses: accuses,
+          }),
+        });
+        showState(state);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    }
+
+    accuseBtn.addEventListener("click", () => sendAccusation(true));
+    passBtn.addEventListener("click", () => sendAccusation(false));
+
+    // Betting phases pause with the acting human at to_act[0]. The amount
+    // field only matters for "raise" (chips above the call amount); the
+    // backend ignores it for other actions.
+    actionBtn.addEventListener("click", async () => {
+      errorEl.textContent = "";
+      try {
+        const state = await api(`/games/${gameId}/action`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            player_id: lastState.to_act[0],
+            action: actionSelect.value,
+            amount: Number(actionAmount.value) || 0,
+          }),
+        });
+        showState(state);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    });
+  </script>
+</body>
+</html>

@@ -372,3 +372,4 @@ class TexasHoldem:
         parts = [f"{p.name}({p.role.value if p.role else 'no role'})"
                  for p in players]
         print(f"  Roles   : {', '.join(parts)}")
+

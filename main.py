@@ -10,6 +10,7 @@ import uuid
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from game.engine import (
@@ -31,7 +32,12 @@ app = FastAPI(
         "/shuffle → /accuse → /action. Bots auto-advance server-side."
     ),
 )
-
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],        # dev only — fine on localhost
+    allow_methods=["*"],        # allow POST, GET, etc.
+    allow_headers=["*"],        # allow Content-Type: application/json
+)
 # ── In-memory store ────────────────────────────────────────────────────────────
 # Maps game_id (str) → game state (dict).
 games: dict[str, dict] = {}
@@ -245,3 +251,4 @@ def do_ability(game_id: str, req: AbilityRequest):
         except IllegalMove as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         return games[game_id]
+
