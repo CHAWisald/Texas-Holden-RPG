@@ -62,7 +62,8 @@
         #2f8757 0%, var(--felt) 45%, #1a5639 75%, var(--felt-edge) 100%);
       border: 14px solid var(--rail);
       border-radius: 150px;
-      padding: 4rem 1.5rem; /* room so seats don't cover the board/pot */
+      /* extra bottom room so the human's seat clears the pot badge */
+      padding: 4rem 1.5rem 5.5rem;
       margin: 2.5rem 0;
       text-align: center;
       color: #fff;
@@ -93,6 +94,14 @@
       color: var(--gold);
       text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
       margin-bottom: 0.9rem;
+    }
+    /* The dealer's shuffle time — the tell for the accusation call
+       (honest shuffles run 12–18 s, rigged ones 15–20 s). */
+    #shuffle-time {
+      margin: -0.5rem 0 0.9rem;
+      font-size: 0.8rem;
+      color: #d8e4ee;
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
     }
     #community {
       display: flex;
@@ -156,6 +165,137 @@
       box-shadow: 0 0 16px 4px rgba(126, 240, 160, 0.65);
     }
 
+    /* Folded this hand: dimmed until the next deal. */
+    .seat.folded { opacity: 0.5; filter: grayscale(0.4); }
+
+    /* Hand-over decorations: winners glow gold and show what they won;
+       at a showdown every revealed seat names its hand. Declared after
+       .active/.folded so the gold wins at HAND_OVER. */
+    .seat.winner {
+      opacity: 1;
+      filter: none;
+      border-color: var(--gold);
+      box-shadow: 0 0 16px 4px rgba(233, 196, 106, 0.55);
+    }
+    .seat .hand-name { font-size: 0.7rem; color: #bfe8cd; font-style: italic; }
+    .seat .seat-win  { font-size: 0.8rem; color: var(--gold); font-weight: bold; }
+
+    /* What the player last did this street ("call 40", "raise to 80",
+       "shoots Doc 🔫", ...). Cleared when the next street begins. */
+    .seat .seat-action { font-size: 0.72rem; color: #8fd4ff; font-style: italic; }
+
+    /* Table position (BTN/SB/BB/UTG/...), pinned to the seat's
+       top-left corner — the dealer disc takes the top-right. */
+    .seat .pos-tag {
+      position: absolute;
+      left: -0.55rem;
+      top: -0.55rem;
+      padding: 0.12rem 0.4rem;
+      border-radius: 999px;
+      background: #1b2a3a;
+      border: 1px solid rgba(158, 203, 255, 0.55);
+      color: #9ecbff;
+      font-size: 0.62rem;
+      font-weight: bold;
+      letter-spacing: 0.04em;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    }
+
+    /* Each player's role, colour-coded under their name. */
+    .seat .seat-role { font-size: 0.66rem; font-weight: bold; letter-spacing: 0.08em; }
+    .seat .seat-role.cursed { color: #c39bd3; }
+    .seat .seat-role.gunner { color: #f0a868; }
+    .seat .seat-role.lucky  { color: #7ef0a0; }
+
+    /* Dealer button: a small white disc pinned to the seat's corner. */
+    .seat .dealer-btn {
+      position: absolute;
+      right: -0.55rem;
+      top: -0.55rem;
+      width: 1.5rem;
+      height: 1.5rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 50%;
+      background: radial-gradient(circle at 35% 30%, #ffffff, #d6d2c8);
+      border: 1px solid #948f82;
+      color: #222;
+      font-size: 0.8rem;
+      font-weight: bold;
+      box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+    }
+
+    /* ── Announcement banner ─────────────────────────────────────── */
+    /* Pops over the table centre for accusation drama: gold pulsing
+       suspense while the accusation lands, then the colour-coded
+       verdict. pointer-events: none so it never blocks clicks. */
+    #announce {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      z-index: 5;
+      max-width: 80%;
+      padding: 0.8rem 1.6rem;
+      border-radius: 12px;
+      background: rgba(0, 0, 0, 0.85);
+      border: 2px solid rgba(255, 255, 255, 0.3);
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+      font-size: 1.05rem;
+      font-weight: bold;
+      letter-spacing: 0.04em;
+      pointer-events: none;
+      animation: announce-pop 0.35s ease-out;
+    }
+    #announce.suspense {
+      color: #ffd877;
+      border-color: rgba(233, 196, 106, 0.65);
+      animation: announce-pop 0.35s ease-out,
+                 announce-pulse 0.9s ease-in-out infinite;
+    }
+    #announce.caught {
+      color: #ff6b62;
+      border-color: rgba(255, 107, 98, 0.75);
+      animation: announce-pop 0.35s ease-out,
+                 announce-flash 0.45s ease-out 2;
+    }
+    #announce.honest { color: #7ef0a0; border-color: rgba(126, 240, 160, 0.65); }
+    #announce.escape { color: #9ecbff; border-color: rgba(158, 203, 255, 0.65); }
+
+    @keyframes announce-pop {
+      from { transform: translate(-50%, -50%) scale(0.6); opacity: 0; }
+      to   { transform: translate(-50%, -50%) scale(1);   opacity: 1; }
+    }
+    @keyframes announce-pulse {
+      50% { box-shadow: 0 0 28px rgba(233, 196, 106, 0.55); }
+    }
+    @keyframes announce-flash {
+      50% { box-shadow: 0 0 32px rgba(255, 107, 98, 0.7); background: rgba(60, 8, 8, 0.9); }
+    }
+
+    /* Chips bet this street: a round chip pinned to the seat's right
+       edge (dashed border = the edge stripes). */
+    .seat .bet-chip {
+      position: absolute;
+      left: 100%;
+      top: 50%;
+      transform: translate(0.45rem, -50%);
+      min-width: 2.1rem;
+      height: 2.1rem;
+      padding: 0 0.3rem;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 999px;
+      background: radial-gradient(circle, #c23434 58%, #8c1f1f 60%);
+      border: 3px dashed rgba(255, 255, 255, 0.85);
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5), inset 0 0 0 2px rgba(0, 0, 0, 0.25);
+      color: #fff;
+      font-size: 0.72rem;
+      font-weight: bold;
+    }
+
     /* ── Action bar ──────────────────────────────────────────────── */
     #action-bar {
       display: flex;
@@ -207,6 +347,15 @@
     }
     #action-amount { width: 4.5rem; }
 
+    /* What the human is facing this turn: "bet is 80 — 60 to call". */
+    #bet-status {
+      font-size: 0.82rem;
+      color: var(--gold);
+      font-weight: bold;
+      padding-right: 0.3rem;
+      white-space: nowrap;
+    }
+
     /* Colour accents: green = advance/safe, red = fold/accuse,
        orange = raise, purple = shuffle/all-in gambles. */
     #new-game-btn, #start-hand-btn { background: #2e7d4f; }
@@ -215,6 +364,12 @@
     #check-btn, #call-btn { background: #2e7d4f; }
     #raise-btn { background: #c77c1b; }
     #all-in-btn { background: #8e24aa; }
+    #ability-btn { background: #20838f; }
+    /* Armed: the next betting action will fire the ability first. */
+    #ability-btn.armed {
+      outline: 2px solid var(--gold);
+      box-shadow: 0 0 12px rgba(233, 196, 106, 0.6);
+    }
 
     /* ── Cards ───────────────────────────────────────────────────── */
     /* A card is a small white rounded box: rank in the top-left
@@ -256,7 +411,9 @@
        object the buttons fetch; nothing here talks to the backend. -->
   <div id="table">
     <div id="seats"></div>
+    <div id="announce" class="hidden"></div>
     <div id="phase-label">No game yet</div>
+    <div id="shuffle-time" class="hidden"></div>
     <div id="community"></div>
     <div id="pot">Pot: —</div>
   </div>
@@ -266,6 +423,12 @@
        layout and styling only. Each group enables during its phase. -->
   <div id="action-bar">
     <div class="control-group">
+      <select id="role-select" title="Pick your role before starting a game; bots draw random roles">
+        <option value="">no role</option>
+        <option value="CURSED" title="Bust → devil loan; can curse an opponent's cards">CURSED</option>
+        <option value="GUNNER" title="Russian-roulette revolver; can shoot opponents">GUNNER</option>
+        <option value="LUCKY" title="3 hole cards keep best 2; 30% immunity">LUCKY</option>
+      </select>
       <button id="new-game-btn">New Game</button>
       <button id="start-hand-btn" class="hidden">Start Hand</button>
       <button id="refresh-btn" disabled>Refresh</button>
@@ -280,13 +443,18 @@
       <button id="accuse-btn" disabled>Accuse</button>
       <button id="pass-btn" disabled>Pass</button>
     </div>
+    <div class="control-group hidden" id="ability-controls">
+      <select id="ability-target" title="Who to target — or the default action"></select>
+      <button id="ability-btn">Use Ability</button>
+    </div>
     <div class="control-group hidden" id="bet-controls">
+      <span id="bet-status"></span>
       <button id="fold-btn" disabled>Fold</button>
       <button id="check-btn" disabled>Check</button>
       <button id="call-btn" disabled>Call</button>
-      <button id="raise-btn" disabled>Raise</button>
+      <button id="raise-btn" disabled>Bet/Raise</button>
       <input id="action-amount" type="number" value="0" min="0"
-             title="Raise by — chips above the call amount">
+             title="Bet/raise by — chips above the call amount">
       <button id="all-in-btn" disabled>All-in</button>
     </div>
   </div>
@@ -319,6 +487,20 @@
     const passBtn       = document.getElementById("pass-btn");
     const actionAmount  = document.getElementById("action-amount");
     const betGroupEl    = document.getElementById("bet-controls");
+    const betStatusEl   = document.getElementById("bet-status");
+    const checkBtn      = document.getElementById("check-btn");
+    const callBtn       = document.getElementById("call-btn");
+    const abilityGroupEl  = document.getElementById("ability-controls");
+    const abilityTargetEl = document.getElementById("ability-target");
+    const abilityBtn      = document.getElementById("ability-btn");
+
+    // Active abilities by role; LUCKY's perks are passive.
+    const ABILITY_BY_ROLE = { GUNNER: "shoot", CURSED: "curse" };
+
+    // During betting the ability button "arms" instead of firing: the
+    // engine only allows mid-street abilities bundled with the action
+    // (use_ability_first), so the next bet button sends both together.
+    let abilityArmed = false;
     // Betting buttons, paired with the action string each one sends.
     const betBtns = [
       ["fold-btn", "fold"], ["check-btn", "check"], ["call-btn", "call"],
@@ -335,11 +517,14 @@
     // Default lineup sent to POST /games. The backend requires a players
     // list (see CreateGameRequest in main.py), so we hard-code one human
     // plus three bots for now. Later this becomes a setup form.
+    // 1000 chips at 25/50 blinds = 20 BB deep. Short-stack poker, and
+    // the BB-denominated role costs bite hard: a shot (10 BB) is half
+    // your starting stack, a devil loan (20 BB) is all of it.
     const DEFAULT_PLAYERS = [
-      { id: "human", name: "You",   is_human: true },
-      { id: "bot1",  name: "Tex",   is_human: false, aggression: 0.3 },
-      { id: "bot2",  name: "Doc",   is_human: false, aggression: 0.5 },
-      { id: "bot3",  name: "Wyatt", is_human: false, aggression: 0.8 },
+      { id: "human", name: "You",   is_human: true,  chips: 1000 },
+      { id: "bot1",  name: "Tex",   is_human: false, chips: 1000, aggression: 0.3 },
+      { id: "bot2",  name: "Doc",   is_human: false, chips: 1000, aggression: 0.5 },
+      { id: "bot3",  name: "Wyatt", is_human: false, chips: 1000, aggression: 0.8 },
     ];
 
     // Shared helper: do a fetch, throw a readable error on any failure,
@@ -394,6 +579,21 @@
       return div;
     }
 
+    // Standard position names by offset from the dealer button, for
+    // each table size. Heads-up the dealer posts the small blind.
+    function positionNames(n) {
+      if (n === 2) return ["BTN/SB", "BB"];
+      const mids = {
+        1: ["UTG"],
+        2: ["UTG", "CO"],
+        3: ["UTG", "MP", "CO"],
+        4: ["UTG", "MP", "HJ", "CO"],
+        5: ["UTG", "UTG+1", "MP", "HJ", "CO"],
+        6: ["UTG", "UTG+1", "UTG+2", "MP", "HJ", "CO"],
+      };
+      return ["BTN", "SB", "BB", ...(mids[n - 3] || [])];
+    }
+
     // Which player must act right now; null when nobody is on the clock
     // (WAITING, HAND_OVER, GAME_OVER).
     function activePlayerId(state) {
@@ -418,6 +618,14 @@
       phaseEl.textContent = status;
       potEl.textContent   = state ? `Pot: ${state.pot}` : "Pot: —";
 
+      // Shuffle time: set when the dealer shuffles, cleared by the next
+      // /start-hand — visible exactly while it's relevant to accuse.
+      const shuffleTimeEl = document.getElementById("shuffle-time");
+      const elapsed = state ? state.cheat_elapsed : null;
+      shuffleTimeEl.classList.toggle("hidden", elapsed == null);
+      if (elapsed != null)
+        shuffleTimeEl.textContent = `⏱ dealer shuffled for ${elapsed.toFixed(1)} s`;
+
       const cards = state ? state.community_cards : [];
       communityEl.replaceChildren(...cards.map(cardEl));
       for (let i = cards.length; i < 5; i++) {
@@ -427,23 +635,64 @@
 
     // ── Seat rendering ─────────────────────────────────────────────
     // Build one seat box: player name + chip stack. The human's seat
-    // gets the .me class (gold border, "(you)" tag via CSS).
-    function seatEl(player, i, n, activeId) {
+    // gets the .me class (gold border, "(you)" tag via CSS). Once the
+    // hand is over, seats also show the outcome (revealed cards, hand
+    // names, winnings); during the hand they show the current bet.
+    function seatEl(player, i, n, activeId, state) {
+      const phase    = state ? state.phase : null;
+      // hand_result is set by the engine at end of hand and cleared on
+      // the next /start-hand, so it's only non-null while the outcome
+      // is current (HAND_OVER, or GAME_OVER right after the last hand).
+      const result   = state ? state.hand_result : null;
+      const showdown = !!result && result.type === "showdown";
+      const isWinner = !!result && result.winner_ids.includes(player.id);
+
       const div = document.createElement("div");
       div.className = "seat"
         + (player.is_human ? " me" : "")
-        + (player.id === activeId ? " active" : "");
+        + (player.id === activeId ? " active" : "")
+        + (player.folded ? " folded" : "")
+        + (isWinner ? " winner" : "");
 
       // Place seat i on an ellipse along the table edge: seat 0 sits at
       // the bottom centre, the rest follow evenly spaced clockwise.
       // left/top are percentages of the table, so the layout scales.
       const angle = Math.PI / 2 + (2 * Math.PI * i) / n;
+      // Seats on the bottom arc get nudged further down so the human's
+      // box (name + hole cards) can't cover the pot badge.
+      const dip = Math.sin(angle) > 0.5 ? 5 : 0;
       div.style.left = `${50 + 44 * Math.cos(angle)}%`;
-      div.style.top  = `${50 + 44 * Math.sin(angle)}%`;
+      div.style.top  = `${50 + 44 * Math.sin(angle) + dip}%`;
 
-      // The human sees their own hole cards in their seat. (The server
-      // sends everyone's hole_cards, but we only show ours.)
-      if (player.is_human && player.hole_cards.length > 0) {
+      // Dealer button + position tag. hand_active_ids is empty before
+      // the first hand, so neither shows until a hand has been dealt;
+      // players eliminated earlier aren't in the list and get no tag.
+      if (state && state.hand_active_ids.length > 0) {
+        const ids = state.hand_active_ids;
+        if (ids[state.dealer_pos] === player.id) {
+          const btn = document.createElement("div");
+          btn.className = "dealer-btn";
+          btn.textContent = "D";
+          btn.title = "Dealer";
+          div.appendChild(btn);
+        }
+        const idx = ids.indexOf(player.id);
+        if (idx !== -1) {
+          const k = (idx - state.dealer_pos + ids.length) % ids.length;
+          const tag = document.createElement("div");
+          tag.className = "pos-tag";
+          tag.textContent = positionNames(ids.length)[k] || "";
+          div.appendChild(tag);
+        }
+      }
+
+      // The human always sees their own hole cards; after a showdown,
+      // exactly the players the engine scored (all_hands) are revealed —
+      // folded and eliminated players stay hidden, and a fold win
+      // reveals nobody, like real poker.
+      const reveal = player.is_human
+        || (showdown && player.id in result.all_hands);
+      if (reveal && player.hole_cards.length > 0) {
         const hole = document.createElement("div");
         hole.className = "hole-cards";
         hole.append(...player.hole_cards.map(cardEl));
@@ -453,12 +702,58 @@
       const name = document.createElement("div");
       name.className = "seat-name";
       name.textContent = player.name;
+      div.appendChild(name);
+
+      if (player.role) {
+        const role = document.createElement("div");
+        role.className = "seat-role " + player.role.toLowerCase();
+        role.textContent = player.role;
+        div.appendChild(role);
+      }
 
       const chips = document.createElement("div");
       chips.className = "seat-chips";
       chips.textContent = `${player.chips} chips`;
+      div.appendChild(chips);
 
-      div.append(name, chips);
+      // Last visible move this street (from the event stream).
+      if (lastActions[player.id]) {
+        const action = document.createElement("div");
+        action.className = "seat-action";
+        action.textContent = lastActions[player.id];
+        div.appendChild(action);
+      }
+
+      // Showdown: name each revealed hand so the result is readable.
+      if (showdown && result.all_hands[player.id]) {
+        const hand = document.createElement("div");
+        hand.className = "hand-name";
+        hand.textContent = result.all_hands[player.id];
+        div.appendChild(hand);
+      }
+
+      // What the winner(s) took: per-player share at a showdown (side
+      // pots can split it), the whole pot on a fold win.
+      if (isWinner) {
+        const win = document.createElement("div");
+        win.className = "seat-win";
+        const amount = showdown ? result.winnings[player.id] : result.pot;
+        win.textContent = `wins +${amount}`;
+        div.appendChild(win);
+      }
+
+      // Chips committed this street, as a chip badge beside the seat.
+      // Blinds post before SHUFFLE/ACCUSATION, so those phases count;
+      // street_bet is stale once the hand is over, so they're excluded.
+      const inHand = phase === "SHUFFLE_PHASE" || phase === "ACCUSATION_PHASE"
+        || (!!phase && phase.endsWith("_BETTING"));
+      if (inHand && player.street_bet > 0) {
+        const bet = document.createElement("div");
+        bet.className = "bet-chip";
+        bet.textContent = player.street_bet;
+        div.appendChild(bet);
+      }
+
       return div;
     }
 
@@ -467,7 +762,132 @@
       const players  = state ? state.players : [];
       const activeId = activePlayerId(state);
       seatsEl.replaceChildren(
-        ...players.map((p, i) => seatEl(p, i, players.length, activeId)));
+        ...players.map((p, i) => seatEl(p, i, players.length, activeId, state)));
+    }
+
+    // ── Announcements ──────────────────────────────────────────────
+    // Banner animation over the table for accusation drama. Messages
+    // queue so a multi-event batch ("X accuses!" → verdict) plays in
+    // sequence rather than overwriting itself.
+    const announceEl = document.getElementById("announce");
+    let announceQueue = [];
+    let announceTimer = null;
+
+    function queueAnnouncement(text, cls, ms) {
+      announceQueue.push({ text, cls, ms });
+      if (announceTimer === null) nextAnnouncement();
+    }
+
+    function nextAnnouncement() {
+      const a = announceQueue.shift();
+      if (!a) {
+        announceTimer = null;
+        announceEl.className = "hidden";
+        return;
+      }
+      announceEl.textContent = a.text;
+      // Clear the class and force a reflow so the pop animation
+      // restarts even when two messages share the same class.
+      announceEl.className = "";
+      void announceEl.offsetWidth;
+      announceEl.className = a.cls;
+      announceTimer = setTimeout(nextAnnouncement, a.ms);
+    }
+
+    // The engine clears state.events on each mutating call, but plain
+    // GET polls return the same batch again until then — so only react
+    // when the batch actually changes.
+    let lastEventsKey = "";
+
+    // Each player's last visible move ("call 40", "fold", ...), shown in
+    // their seat by seatEl. Filled from events, wiped when a new street
+    // (or hand) starts so the labels always describe the current street.
+    let lastActions = {};
+
+    function processEvents(state) {
+      const events = state && state.events ? state.events : [];
+      const key = JSON.stringify(events);
+      if (key === lastEventsKey) return;
+      lastEventsKey = key;
+
+      const name = id => {
+        const p = state.players.find(p => p.id === id);
+        return p ? p.name : id;
+      };
+      const act = (pid, label) => { lastActions[pid] = label; };
+
+      for (const ev of events) {
+        switch (ev.type) {
+          // New hand / street: stale labels off the table.
+          case "hand_start":
+          case "preflop_start":
+          case "street_start":
+            lastActions = {};
+            break;
+
+          // Betting actions.
+          case "fold":      act(ev.player_id, "fold"); break;
+          case "check":     act(ev.player_id, "check"); break;
+          case "call":      act(ev.player_id, `call ${ev.amount}`); break;
+          case "raise":     act(ev.player_id, `raise to ${ev.amount}`); break;
+          case "all_in":    act(ev.player_id, `all-in ${ev.amount}`); break;
+          case "dead_fold": act(ev.player_id, "fold (no chips)"); break;
+
+          // Accusation mini-game: seat labels + the table banner.
+          case "passed_accusation":
+            act(ev.player_id, "pass");
+            break;
+          case "human_accused":
+          case "bot_accused":
+            act(ev.accuser_id, "accuse!");
+            queueAnnouncement(`${name(ev.accuser_id)} accuses the dealer!`,
+              "suspense", 1500);
+            break;
+          case "caught_cheating":
+            queueAnnouncement(
+              `CAUGHT! ${name(ev.dealer_id)} rigged the deck — pays ${ev.penalty}, redeal`,
+              "caught", 3000);
+            break;
+          case "false_accusation":
+            queueAnnouncement(
+              `Honest shuffle — ${name(ev.accuser_id)}'s accusation costs ${2 * state.big_blind}`,
+              "honest", 3000);
+            break;
+          case "lucky_escape":
+            queueAnnouncement(
+              `${name(ev.dealer_id)} slips the accusation… a lucky escape!`,
+              "escape", 3000);
+            break;
+
+          // Role abilities.
+          case "shot_hit":
+            act(ev.shooter_id, `shoots ${name(ev.target_id)} 🔫`);
+            act(ev.target_id, "shot dead");
+            break;
+          case "shot_miss":
+            act(ev.shooter_id, `shoots ${name(ev.target_id)} — misses`);
+            break;
+          case "revolver_bang":
+            act(ev.player_id, "🔫 BANG — dead");
+            break;
+          case "revolver_click":
+            // cost present on bought shots; the bust-revival one is free.
+            act(ev.player_id, ev.cost
+              ? `🔫 click — paid ${ev.cost}, won ${ev.chips_gained}`
+              : `🔫 click… +${ev.chips_gained}`);
+            break;
+          case "cursed":
+            act(ev.by, `curses ${name(ev.target_id)}`);
+            act(ev.target_id, `cursed (${ev.hands} hands)`);
+            break;
+          case "lucky_immune":
+            act(ev.target_id, `lucky — immune to ${ev.effect}`);
+            break;
+          case "devil_deal":
+            act(ev.player_id, `devil loan +${ev.loan}`);
+            break;
+        }
+      }
     }
 
     // Render a state object (visual table + raw debug JSON) and re-gate
@@ -475,6 +895,7 @@
     function showState(state) {
       lastState = state;
       stateEl.textContent = JSON.stringify(state, null, 2);
+      processEvents(state);
       renderTable(state);
       renderSeats(state);
       updateControls();
@@ -503,6 +924,59 @@
       const betting = !!phase && phase.endsWith("_BETTING") && myTurn;
       betGroupEl.classList.toggle("hidden", !betting);
       for (const [btn] of betBtns) btn.disabled = !betting;
+
+      // Ability button, for roles with an active ability. Between hands
+      // it fires /ability immediately; during the human's betting turn
+      // it arms use_ability_first for the next action. Hidden for a
+      // CURSED player who has burned the one-shot curse.
+      const human   = lastState ? lastState.players.find(p => p.is_human) : null;
+      const ability = human ? ABILITY_BY_ROLE[human.role] : null;
+      const between = phase === "WAITING" || phase === "HAND_OVER";
+      const canUse  = !!ability && (between || betting) && human.chips > 0
+        && !(ability === "curse" && human.has_cursed);
+      abilityGroupEl.classList.toggle("hidden", !canUse);
+      if (!canUse) abilityArmed = false;
+      if (canUse) {
+        // Show the escalating price on the trigger itself: every shot
+        // taken doubles the next one (10 BB × 2^shots), self or not.
+        const shotCost = 10 * lastState.big_blind
+          * 2 ** (human.bullets_used || 0);
+        const label = ability === "shoot" ? `Shoot 🔫 ${shotCost}` : "Curse 😈";
+        abilityBtn.textContent = betting
+          ? (abilityArmed ? `${label} armed — pick action` : `${label} first…`)
+          : label;
+        abilityBtn.classList.toggle("armed", abilityArmed);
+        // Rebuild the target list but keep the current selection — this
+        // re-runs on every poll and must not yank the dropdown around.
+        const prev = abilityTargetEl.value;
+        abilityTargetEl.innerHTML = "";
+        const def = document.createElement("option");
+        def.value = "";
+        def.textContent = ability === "shoot"
+          ? "self (roulette: win 20BB or die)" : "auto (chip leader)";
+        abilityTargetEl.appendChild(def);
+        for (const p of lastState.players) {
+          if (p.is_human || p.chips <= 0) continue;
+          const opt = document.createElement("option");
+          opt.value = p.id;
+          opt.textContent = p.name;
+          abilityTargetEl.appendChild(opt);
+        }
+        abilityTargetEl.value =
+          [...abilityTargetEl.options].some(o => o.value === prev) ? prev : "";
+      }
+
+      // Spell out what the turn costs: how much it is to call, with the
+      // Call button carrying the amount. Check is illegal once there's
+      // a bet to match, so grey it out instead of letting it 400.
+      if (betting) {
+        const toCall = Math.max(0, lastState.current_bet - actor.street_bet);
+        callBtn.textContent = toCall > 0 ? `Call ${toCall}` : "Call";
+        checkBtn.disabled   = toCall > 0;
+        betStatusEl.textContent = toCall > 0
+          ? `bet is ${lastState.current_bet} — ${toCall} to call`
+          : "no bet to you — check or bet";
+      }
     }
 
     // Fill the shuffle <select> with the cheat hands the backend offers.
@@ -518,16 +992,27 @@
       }
     }
 
+    const roleSelectEl = document.getElementById("role-select");
+    const ROLES = ["CURSED", "GUNNER", "LUCKY"];
+
     newGameBtn.addEventListener("click", async () => {
       errorEl.textContent = "";
       try {
+        // The human plays the chosen role ("" = none); each bot draws a
+        // random one so every game exercises the role mechanics.
+        const players = DEFAULT_PLAYERS.map(p => ({
+          ...p,
+          role: p.is_human
+            ? (roleSelectEl.value || null)
+            : ROLES[Math.floor(Math.random() * ROLES.length)],
+        }));
         const state = await api("/games", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            players: DEFAULT_PLAYERS,
-            small_blind: 10,
-            big_blind: 20,
+            players: players,
+            small_blind: 25,
+            big_blind: 50,
           }),
         });
         // POST /games returns the full initial state with game_id inside it.
@@ -641,6 +1126,36 @@
     accuseBtn.addEventListener("click", () => sendAccusation(true));
     passBtn.addEventListener("click", () => sendAccusation(false));
 
+    // Ability button. During the human's betting turn it just arms the
+    // ability — the engine requires mid-street abilities to ride on the
+    // action itself, so the next bet button sends use_ability_first and
+    // the player still chooses check/bet/fold/raise as normal. Between
+    // hands it fires /ability immediately. Empty target = the role's
+    // default (GUNNER: self-roulette, CURSED: auto-pick target).
+    abilityBtn.addEventListener("click", async () => {
+      errorEl.textContent = "";
+      if (lastState && lastState.phase.endsWith("_BETTING")) {
+        abilityArmed = !abilityArmed;
+        updateControls();
+        return;
+      }
+      try {
+        const human = lastState.players.find(p => p.is_human);
+        const state = await api(`/games/${gameId}/ability`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            player_id: human.id,
+            ability_type: ABILITY_BY_ROLE[human.role],
+            target_id: abilityTargetEl.value || null,
+          }),
+        });
+        showState(state);
+      } catch (err) {
+        errorEl.textContent = err.message;
+      }
+    });
+
     // Betting phases pause with the acting human at to_act[0]. All five
     // bet buttons send the same /action request as before — each just
     // bakes in its action string. The amount field only matters for
@@ -650,6 +1165,10 @@
       btn.addEventListener("click", async () => {
         errorEl.textContent = "";
         try {
+          // If the ability is armed, it fires before this action —
+          // one request, per the engine's mid-street ability rule.
+          const armed = abilityArmed;
+          abilityArmed = false;
           const state = await api(`/games/${gameId}/action`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
@@ -657,6 +1176,8 @@
               player_id: lastState.to_act[0],
               action: action,
               amount: Number(actionAmount.value) || 0,
+              use_ability_first: armed,
+              ability_target_id: armed ? (abilityTargetEl.value || null) : null,
             }),
           });
           showState(state);

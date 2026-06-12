@@ -673,15 +673,39 @@ class TestRoleAbilities:
         with pytest.raises(ValueError, match="cannot use ability"):
             apply_ability(state, "cursed", "shoot")
 
-    def test_self_shoot_is_free_and_rewards_on_click(self):
-        """Self-shoot costs nothing and grants 20BB on a click — even when the
-        Gunner is too broke to afford an opponent shot."""
+    def test_self_shoot_costs_chips_and_rewards_on_click(self):
+        """Self-shoot pays the same escalating cost as any shot; a click
+        still grants the 20BB reward on top."""
         state = self._gunner_game()
-        g = _get_player(state, "gunner")
-        g["chips"] = 5   # can't afford the 10BB opponent-shot cost
+        chips_before = _get_player(state, "gunner")["chips"]
         with patch("game.engine._fire_revolver", return_value=False):
             state = apply_ability(state, "gunner", "shoot", target_id=None)
-        assert _get_player(state, "gunner")["chips"] == 5 + state["big_blind"] * 20
+        cost = state["big_blind"] * 10 * (2 ** 0)
+        assert _get_player(state, "gunner")["chips"] == \
+            chips_before - cost + state["big_blind"] * 20
+
+    def test_self_shoot_fails_when_insufficient_chips(self):
+        """A broke Gunner can't buy the self-shoot gamble; the free
+        desperation shot only happens on bust (_handle_bust)."""
+        state = self._gunner_game()
+        _get_player(state, "gunner")["chips"] = 5
+        state = apply_ability(state, "gunner", "shoot", target_id=None)
+        assert any(e["type"] == "ability_failed" for e in state["events"])
+        g = _get_player(state, "gunner")
+        assert g["chips"] == 5 and not g["died_by_revolver"]
+
+    def test_shot_cost_escalates_across_self_and_opponent_shots(self):
+        """bullets_used is one counter: every shot doubles the next one's
+        price, no matter who it was aimed at."""
+        state = self._gunner_game()
+        bb = state["big_blind"]
+        _get_player(state, "gunner")["chips"] = bb * 1000
+        with patch("game.engine._fire_revolver", return_value=False):
+            state = apply_ability(state, "gunner", "shoot", target_id=None)
+            after_self = _get_player(state, "gunner")["chips"]
+            state = apply_ability(state, "gunner", "shoot", target_id="target")
+        assert after_self == bb * 1000 - bb * 10 + bb * 20   # paid 10BB, won 20BB
+        assert _get_player(state, "gunner")["chips"] == after_self - bb * 20
 
     def test_self_shoot_kills_on_bang(self):
         state = self._gunner_game()

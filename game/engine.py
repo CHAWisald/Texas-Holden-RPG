@@ -433,28 +433,9 @@ def _handle_bust(state: dict, p: dict) -> bool:
 def _do_shoot(state: dict, shooter: dict, target_id: Optional[str]):
     bb = state["big_blind"]
 
-    if target_id is None:
-        # Self-shoot: free (no chip cost). CLICK → gain 20BB and survive;
-        # BANG → eliminated. Lets a broke Gunner gamble for chips.
-        shooter["bullets_used"] = shooter.get("bullets_used", 0) + 1
-        if _fire_revolver(shooter):
-            shooter["died_by_revolver"] = True
-            shooter["chips"] = 0
-            _emit(state, "revolver_bang", player_id=shooter["id"])
-        else:
-            revival = bb * 20
-            shooter["chips"] += revival
-            _emit(state, "revolver_click", player_id=shooter["id"],
-                  chips_gained=revival)
-        return
-
-    # Shooting an opponent costs chips (doubles per shot).
-    target = _get_player(state, target_id)
-    if target is None or target["chips"] <= 0:
-        _emit(state, "ability_failed", player_id=shooter["id"],
-              reason="invalid_target", target_id=target_id)
-        return
-
+    # Every trigger pull — self-shot or opponent shot — pays the same
+    # escalating price (doubles per shot taken). The only free shot is
+    # the forced bust-revival roulette in _handle_bust.
     bullets_used = shooter.get("bullets_used", 0)
     cost         = bb * 10 * (2 ** bullets_used)
     if shooter["chips"] < cost:
@@ -462,8 +443,28 @@ def _do_shoot(state: dict, shooter: dict, target_id: Optional[str]):
               reason="insufficient_chips", cost_needed=cost)
         return
 
+    if target_id is not None:
+        target = _get_player(state, target_id)
+        if target is None or target["chips"] <= 0:
+            _emit(state, "ability_failed", player_id=shooter["id"],
+                  reason="invalid_target", target_id=target_id)
+            return
+
     shooter["chips"]       -= cost
     shooter["bullets_used"] = bullets_used + 1
+
+    if target_id is None:
+        # Self-shoot gamble: CLICK → gain 20BB; BANG → eliminated.
+        if _fire_revolver(shooter):
+            shooter["died_by_revolver"] = True
+            shooter["chips"] = 0
+            _emit(state, "revolver_bang", player_id=shooter["id"], cost=cost)
+        else:
+            revival = bb * 20
+            shooter["chips"] += revival
+            _emit(state, "revolver_click", player_id=shooter["id"],
+                  chips_gained=revival, cost=cost)
+        return
 
     if _lucky_immune(target):
         _emit(state, "lucky_immune", target_id=target_id, effect="shot")

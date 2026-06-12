@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```bash
 fastapi dev main.py        # API server — interactive docs at http://127.0.0.1:8000/docs
-python -m pytest -q        # test suite (186 tests, runs in <1 s)
+python -m pytest -q        # test suite (188 tests, runs in <1 s)
 ```
 
 Dependencies: `fastapi`, `pydantic`, `pytest`. The `game/` package itself is standard-library only. `index.html` is the web UI — a single self-contained file (no build step, no framework); open it directly in a browser while the API runs on `localhost:8000`.
@@ -20,7 +20,7 @@ There are two parallel implementations:
 1. **API path (current):** `main.py` (FastAPI) → `game/engine.py`. The engine is a pure state machine — no I/O, no classes; all game state is one JSON-serialisable dict. This is what the HTTP API and `tests/test_engine.py` exercise.
 2. **Legacy CLI path:** `game/texas_holdem.py` + `game/player.py` + the `CheatSystem` / `RoleSystem` classes, which `print()` and read stdin directly. Nothing launches it anymore (`main.py` no longer imports it), but `tests/test_roles.py` still covers `RoleSystem`. The engine deliberately re-implements this logic in pure form rather than calling it.
 
-**API flow:** `POST /games` → `POST /games/{id}/start-hand` → (`/shuffle` → `/accuse` if the human is involved) → repeated `/action` → hand resolves → `/start-hand` again. `/ability` fires a role ability between hands. Bots auto-advance server-side: every engine entry point runs bot turns until the next *human* decision point and returns the state paused there, with `state["phase"]` naming what input is expected and `state["events"]` listing what happened since the last call (cleared on each public engine call).
+**API flow:** `POST /games` → `POST /games/{id}/start-hand` → (`/shuffle` → `/accuse` if the human is involved) → repeated `/action` → hand resolves → `/start-hand` again. `/ability` fires a role ability in any non-betting phase; during the player's betting turn, abilities ride the `/action` request via `use_ability_first` + `ability_target_id` instead (`apply_ability` rejects betting phases). Bots auto-advance server-side: every engine entry point runs bot turns until the next *human* decision point and returns the state paused there, with `state["phase"]` naming what input is expected and `state["events"]` listing what happened since the last call (cleared on each public engine call).
 
 **Engine conventions (`game/engine.py`):**
 
@@ -35,17 +35,21 @@ There are two parallel implementations:
 **Roles** (definitions in `game/roles.py`, pure re-implementation in `engine.py`):
 
 - **CURSED** — on bust, takes a devil loan (20 BB, repay 25 BB within 5–8 hands or be eliminated); while in devil state their hole cards may be tampered each hand. One-time ability: curse an opponent (tampered cards for 3–5 hands). Winning uncontested with a weak hand forgives 5 BB of debt.
-- **GUNNER** — Russian-roulette revolver. On bust, may self-shoot for 20 BB (or die). Can pay chips (10 BB, doubling per shot) to shoot an opponent dead.
+- **GUNNER** — Russian-roulette revolver (one bullet, six chambers). *Every* voluntary trigger pull costs `10 BB × 2^bullets_used` — shooting an opponent (bang kills them) and self-shooting (click pays out 20 BB; bang eliminates the shooter) both pay the escalating price and both advance `bullets_used`. The revolver reloads **only** when an opponent is killed (`_reload_revolver` in the `shot_hit` path). The forced bust-revival roulette in `_handle_bust` is the one free pull. Insufficient chips → `ability_failed` event, no state change.
 - **LUCKY** — dealt 3 hole cards, keeps best 2; 30% immunity to curse/shot; 30% escape when caught cheating.
 
 **Web UI (`index.html`):** one self-contained file — CSS, markup, and vanilla JS, no dependencies. It is being built up incrementally; keep changes small and isolated to the step being asked for.
 
-- All rendering funnels through `showState(state)`: it caches the response in `lastState`, dumps raw JSON into the debug `<details>` block, then calls `renderTable` (phase label, community cards, pot), `renderSeats`, and `updateControls`. New display features should hang off this funnel, not off individual button handlers.
+- All rendering funnels through `showState(state)`: it caches the response in `lastState`, dumps raw JSON into the debug `<details>` block, then calls `processEvents`, `renderTable` (phase label, community cards, pot, shuffle time), `renderSeats`, `updateControls`, and finally `updatePolling`. New display features should hang off this funnel, not off individual button handlers — poll re-renders must be idempotent.
+- **Polling:** the page polls `GET /games/{game_id}` every 2 s (`POLL_MS`) and feeds the result to `showState`. `updatePolling()` starts the timer when a game is active and stops it when there is none or the phase is GAME_OVER; `pollInFlight` guards against overlapping requests.
+- **Event de-dup:** mutating engine calls clear `state.events`, but GET polls re-deliver the same list, so `processEvents` fingerprints it (`lastEventsKey = JSON.stringify(events)`) and skips repeats. Events drive two things: per-seat action labels (`lastActions[player_id]` — "fold", "call 50", "raise to 200", shot/curse outcomes; cleared on each street start) and the `#announce` banner queue (`queueAnnouncement` — accusation suspense, cheat verdicts).
 - `activePlayerId(state)` is the single source for "who must act": `hand_active_ids[dealer_pos]` in SHUFFLE_PHASE, `accusation_order[0]` in ACCUSATION_PHASE, `to_act[0]` in `*_BETTING`, else null. Both the turn highlight (`.seat.active`) and control gating use it; the button handlers read the same fields when building request bodies.
-- `updateControls()` re-gates everything from `lastState` after each response: Start Hand is visible only in WAITING/HAND_OVER (the phases where the engine accepts `/start-hand`); the betting group `#bet-controls` is shown only in a `*_BETTING` phase when the actor `is_human`; shuffle/accuse buttons enable in their phases. Use the `.hidden` class (`display: none !important`) to hide elements — the bare `hidden` attribute loses to `.control-group { display: flex }`.
+- `updateControls()` re-gates everything from `lastState` after each response: Start Hand is visible only in WAITING/HAND_OVER; the betting group `#bet-controls` is shown only in a `*_BETTING` phase when the actor `is_human` (with `#bet-status` showing "bet is X — Y to call", Check disabled when facing a bet, Call labelled with the amount); shuffle/accuse buttons enable in their phases. Use the `.hidden` class (`display: none !important`) to hide elements — the bare `hidden` attribute loses to `.control-group { display: flex }`.
+- **Ability UI:** `#ability-controls` shows whenever the human's role grants an ability (Gunner's button displays the live shot price). Between hands the button POSTs `/ability` directly. During the human's betting turn it instead *arms* the ability (`abilityArmed` flag); the next bet/check/call/raise/fold sends `use_ability_first: true` + `ability_target_id` on the `/action` request. The target `<select>` is rebuilt every render with the previous selection preserved (polling would otherwise reset it).
 - All requests go through the `api()` helper (network errors and non-2xx → thrown `Error`, rendered into `#error`). Every handler ends by calling `showState` with the returned state — the server response is the only thing that updates the UI.
-- Seats are placed on an ellipse with percentage `left`/`top` (seat 0 bottom-centre, clockwise). Cards are CSS boxes built by `cardEl()` from the engine's `{rank, suit}` dicts.
-- The server currently sends *all* players' `hole_cards`; the UI only renders the human's. Hiding bots' cards properly would need a backend change.
+- Seats are placed on an ellipse with percentage `left`/`top` (seat 0 bottom-centre, clockwise; bottom-arc seats dip an extra 5% so the human's seat clears the pot). Each seat shows dealer button, position tag (`positionNames(n)` — BTN/SB/BB/UTG/…/CO, heads-up BTN/SB vs BB), role tag, current `street_bet` chip, and last-action label. Cards are CSS boxes built by `cardEl()` from the engine's `{rank, suit}` dicts.
+- **Hole-card reveal:** only the human's cards render during play. At showdown, a seat's cards are revealed iff its player id is in `hand_result.all_hands` (i.e. they were still in the hand) — folded players stay hidden. Note the server still *sends* all `hole_cards`; hiding them properly would need a backend change.
+- **New Game defaults:** 4 players × 1000 chips, blinds 25/50 (20 BB stacks). The human picks a role from `#role-select` (or none); bots are assigned random roles.
 
 **Module map:**
 
