@@ -9,7 +9,7 @@ fastapi dev main.py        # API server — interactive docs at http://127.0.0.1
 python -m pytest -q        # test suite (186 tests, runs in <1 s)
 ```
 
-Dependencies: `fastapi`, `pydantic`, `pytest`. The `game/` package itself is standard-library only. `index.html` is a minimal dev console (open directly in a browser; it talks to `localhost:8000`).
+Dependencies: `fastapi`, `pydantic`, `pytest`. The `game/` package itself is standard-library only. `index.html` is the web UI — a single self-contained file (no build step, no framework); open it directly in a browser while the API runs on `localhost:8000`.
 
 ## Architecture
 
@@ -38,11 +38,21 @@ There are two parallel implementations:
 - **GUNNER** — Russian-roulette revolver. On bust, may self-shoot for 20 BB (or die). Can pay chips (10 BB, doubling per shot) to shoot an opponent dead.
 - **LUCKY** — dealt 3 hole cards, keeps best 2; 30% immunity to curse/shot; 30% escape when caught cheating.
 
+**Web UI (`index.html`):** one self-contained file — CSS, markup, and vanilla JS, no dependencies. It is being built up incrementally; keep changes small and isolated to the step being asked for.
+
+- All rendering funnels through `showState(state)`: it caches the response in `lastState`, dumps raw JSON into the debug `<details>` block, then calls `renderTable` (phase label, community cards, pot), `renderSeats`, and `updateControls`. New display features should hang off this funnel, not off individual button handlers.
+- `activePlayerId(state)` is the single source for "who must act": `hand_active_ids[dealer_pos]` in SHUFFLE_PHASE, `accusation_order[0]` in ACCUSATION_PHASE, `to_act[0]` in `*_BETTING`, else null. Both the turn highlight (`.seat.active`) and control gating use it; the button handlers read the same fields when building request bodies.
+- `updateControls()` re-gates everything from `lastState` after each response: Start Hand is visible only in WAITING/HAND_OVER (the phases where the engine accepts `/start-hand`); the betting group `#bet-controls` is shown only in a `*_BETTING` phase when the actor `is_human`; shuffle/accuse buttons enable in their phases. Use the `.hidden` class (`display: none !important`) to hide elements — the bare `hidden` attribute loses to `.control-group { display: flex }`.
+- All requests go through the `api()` helper (network errors and non-2xx → thrown `Error`, rendered into `#error`). Every handler ends by calling `showState` with the returned state — the server response is the only thing that updates the UI.
+- Seats are placed on an ellipse with percentage `left`/`top` (seat 0 bottom-centre, clockwise). Cards are CSS boxes built by `cardEl()` from the engine's `{rank, suit}` dicts.
+- The server currently sends *all* players' `hole_cards`; the UI only renders the human's. Hiding bots' cards properly would need a backend change.
+
 **Module map:**
 
 | File | Responsibility |
 |---|---|
 | `main.py` | FastAPI app: endpoints, Pydantic request models, per-game locks, `IllegalMove` → 400 |
+| `index.html` | Single-file web UI: visual table + state-gated action bar (see Web UI section) |
 | `game/engine.py` | Pure state-machine engine — the source of truth for game logic |
 | `game/card.py` | `Card` (rank 2–14, `Suit` enum), `Deck` |
 | `game/hand_evaluator.py` | `HandEvaluator.best_hand()` — scores any 5-of-N subset; returns `(score_tuple, hand_name)`, or `None` for <5 cards |

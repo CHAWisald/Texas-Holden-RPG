@@ -4,38 +4,113 @@
   <meta charset="UTF-8">
   <title>Poker — Dev Console</title>
   <style>
-    /* Minimal styling so the JSON is readable; no functional purpose. */
-    body { font-family: sans-serif; max-width: 800px; margin: 2rem auto; padding: 0 1rem; }
+    /* Appearance only — every id/class the JS uses is unchanged. The
+       palette lives in these variables; tweak the look here. */
+    :root {
+      --bg: #15181d;
+      --felt: #257049;
+      --felt-edge: #123c28;
+      --rail: #53351d;
+      --rail-edge: #6e4a28;
+      --gold: #e9c46a;
+      --ink: #e8e6df;
+      --muted: #9aa3ad;
+      --panel: #1c2026;
+    }
+
+    body {
+      font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+      background: radial-gradient(1100px 520px at 50% -8%, #242b34, var(--bg) 70%);
+      color: var(--ink);
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 1.5rem 1rem 3rem;
+      min-height: 100vh;
+    }
+    h1 {
+      font-family: Georgia, "Times New Roman", serif;
+      font-size: 1.7rem;
+      font-weight: normal;
+      letter-spacing: 0.12em;
+      text-align: center;
+      color: var(--gold);
+      text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+      margin: 0.5rem 0 1rem;
+    }
     button { font-size: 1rem; padding: 0.5rem 1rem; margin-right: 0.5rem; cursor: pointer; }
     button:disabled { cursor: not-allowed; opacity: 0.5; }
-    #game-id { font-family: monospace; }
-    #error { color: #b00020; white-space: pre-wrap; }
-    pre { background: #f4f4f4; padding: 1rem; overflow-x: auto; border-radius: 4px; }
+    /* !important so it also wins over .control-group's display:flex. */
+    .hidden { display: none !important; }
+    body > p { color: var(--muted); font-size: 0.85rem; margin: 0.25rem 0; }
+    #game-id { font-family: ui-monospace, Menlo, Consolas, monospace; color: var(--gold); }
+    #error { color: #ff7a70; white-space: pre-wrap; }
+    pre {
+      background: #11141a;
+      color: #c6cdd5;
+      border: 1px solid #2a313a;
+      padding: 1rem;
+      overflow-x: auto;
+      border-radius: 8px;
+      font-size: 0.8rem;
+    }
+    details summary { color: var(--muted); cursor: pointer; }
 
     /* ── Poker table ─────────────────────────────────────────────── */
     #table {
       position: relative;   /* anchor for the absolutely-positioned seats */
-      background: radial-gradient(ellipse at center, #2e7d4f, #1d5c38);
-      border: 8px solid #5a3a22;
-      border-radius: 120px;
+      background: radial-gradient(ellipse at 50% 38%,
+        #2f8757 0%, var(--felt) 45%, #1a5639 75%, var(--felt-edge) 100%);
+      border: 14px solid var(--rail);
+      border-radius: 150px;
       padding: 4rem 1.5rem; /* room so seats don't cover the board/pot */
-      margin: 2rem 0;
+      margin: 2.5rem 0;
       text-align: center;
       color: #fff;
+      /* Wood-rail highlight ring, drop shadow onto the page, and a felt
+         vignette so the centre reads brighter than the edge. */
+      box-shadow:
+        0 0 0 3px var(--rail-edge),
+        0 0 0 4px rgba(0, 0, 0, 0.6),
+        0 22px 45px rgba(0, 0, 0, 0.55),
+        inset 0 0 70px rgba(0, 0, 0, 0.45),
+        inset 0 2px 12px rgba(255, 255, 255, 0.08);
+    }
+    /* Decorative betting line inset on the felt. pointer-events: none so
+       it can never intercept clicks; positioned seats paint above it. */
+    #table::before {
+      content: "";
+      position: absolute;
+      inset: 1.6rem 2.2rem;
+      border: 2px solid rgba(255, 255, 255, 0.12);
+      border-radius: 130px;
+      pointer-events: none;
     }
     #phase-label {
-      font-size: 0.95rem;
-      letter-spacing: 0.08em;
+      font-size: 0.85rem;
+      letter-spacing: 0.18em;
       text-transform: uppercase;
       font-weight: bold;
-      margin-bottom: 0.75rem;
+      color: var(--gold);
+      text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+      margin-bottom: 0.9rem;
     }
     #community {
       display: flex;
       gap: 0.5rem;
       justify-content: center;
     }
-    #pot { margin-top: 0.75rem; font-size: 1.1rem; font-weight: bold; }
+    #pot {
+      display: inline-block;
+      margin-top: 0.9rem;
+      padding: 0.3rem 1.1rem;
+      font-size: 1rem;
+      font-weight: bold;
+      color: var(--gold);
+      background: rgba(0, 0, 0, 0.45);
+      border: 1px solid rgba(233, 196, 106, 0.45);
+      border-radius: 999px;
+      box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.5);
+    }
 
     /* ── Seats ───────────────────────────────────────────────────── */
     /* #seats spans the whole table; each seat is absolutely placed on
@@ -45,17 +120,22 @@
       position: absolute;
       transform: translate(-50%, -50%);  /* centre the box on its point */
       min-width: 5.5rem;
-      padding: 0.3rem 0.6rem;
-      background: rgba(0, 0, 0, 0.55);
-      border: 2px solid rgba(255, 255, 255, 0.25);
-      border-radius: 10px;
+      padding: 0.35rem 0.7rem;
+      background: linear-gradient(180deg, rgba(24, 27, 32, 0.92), rgba(10, 12, 15, 0.9));
+      border: 1.5px solid rgba(255, 255, 255, 0.2);
+      border-radius: 12px;
       font-size: 0.85rem;
       text-align: center;
+      box-shadow: 0 5px 12px rgba(0, 0, 0, 0.5);
     }
-    .seat .seat-name { font-weight: bold; }
-    .seat .seat-chips { opacity: 0.85; }
+    .seat .seat-name { font-weight: bold; letter-spacing: 0.02em; }
+    .seat .seat-chips { color: #ffd877; font-size: 0.78rem; opacity: 0.95; }
     /* The human's seat: gold border + "(you)" tag. */
-    .seat.me { border-color: #ffd54f; background: rgba(0, 0, 0, 0.8); }
+    .seat.me {
+      border-color: var(--gold);
+      background: linear-gradient(180deg, rgba(30, 27, 16, 0.96), rgba(14, 12, 8, 0.94));
+      box-shadow: 0 5px 12px rgba(0, 0, 0, 0.5), 0 0 10px rgba(233, 196, 106, 0.25);
+    }
     .seat.me .seat-name::after { content: " (you)"; font-weight: normal; opacity: 0.8; }
 
     /* Hole cards shown inside the human's seat: smaller than board cards. */
@@ -73,8 +153,68 @@
        when it's the human's own turn. */
     .seat.active {
       border-color: #7ef0a0;
-      box-shadow: 0 0 14px 4px rgba(126, 240, 160, 0.75);
+      box-shadow: 0 0 16px 4px rgba(126, 240, 160, 0.65);
     }
+
+    /* ── Action bar ──────────────────────────────────────────────── */
+    #action-bar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: center;
+      row-gap: 0.5rem;
+      background: linear-gradient(180deg, #232831, var(--panel));
+      border: 1px solid #2e353f;
+      border-radius: 16px;
+      padding: 0.8rem 0.5rem;
+      margin: 1rem 0;
+      box-shadow: 0 8px 20px rgba(0, 0, 0, 0.35);
+    }
+    .control-group {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      padding: 0 0.9rem;
+    }
+    .control-group + .control-group { border-left: 1px solid #353d48; }
+
+    #action-bar button {
+      margin: 0;                /* override the generic button margin */
+      font-size: 0.9rem;
+      font-weight: bold;
+      letter-spacing: 0.02em;
+      color: #fff;
+      background: #4a525e;      /* neutral; accents below override */
+      border: none;
+      border-radius: 999px;     /* pill */
+      padding: 0.45rem 1.05rem;
+      text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22),
+                  0 2px 5px rgba(0, 0, 0, 0.4);
+    }
+    #action-bar button:hover:enabled  { filter: brightness(1.15); }
+    #action-bar button:active:enabled { transform: translateY(1px); }
+    #action-bar button:disabled { opacity: 0.35; box-shadow: none; text-shadow: none; }
+
+    #action-bar select,
+    #action-bar input {
+      font-size: 0.9rem;
+      padding: 0.4rem 0.5rem;
+      border: 1px solid #424a55;
+      border-radius: 8px;
+      background: #2c313a;
+      color: #fff;
+    }
+    #action-amount { width: 4.5rem; }
+
+    /* Colour accents: green = advance/safe, red = fold/accuse,
+       orange = raise, purple = shuffle/all-in gambles. */
+    #new-game-btn, #start-hand-btn { background: #2e7d4f; }
+    #shuffle-btn { background: #6a4f9e; }
+    #accuse-btn, #fold-btn { background: #b03030; }
+    #check-btn, #call-btn { background: #2e7d4f; }
+    #raise-btn { background: #c77c1b; }
+    #all-in-btn { background: #8e24aa; }
 
     /* ── Cards ───────────────────────────────────────────────────── */
     /* A card is a small white rounded box: rank in the top-left
@@ -85,62 +225,29 @@
       justify-content: space-between;
       width: 3rem;
       height: 4.2rem;
-      background: #fff;
-      color: #1a1a1a;
-      border: 1px solid #999;
-      border-radius: 6px;
+      background: linear-gradient(160deg, #ffffff 0%, #f2efe6 100%);
+      color: #1f232b;
+      border: 1px solid #b9b4a6;
+      border-radius: 7px;
       padding: 0.25rem 0.35rem;
-      box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+      box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45),
+                  inset 0 1px 0 rgba(255, 255, 255, 0.8);
       font-weight: bold;
+      font-family: Georgia, "Times New Roman", serif;
     }
     .card .rank { font-size: 1.05rem; line-height: 1; align-self: flex-start; }
     .card .suit { font-size: 1.5rem;  line-height: 1; align-self: flex-end; }
     .card.red { color: #c0202a; }
     /* Empty community slot: dashed outline where a card will appear. */
     .card.slot {
-      background: rgba(255, 255, 255, 0.08);
-      border: 1px dashed rgba(255, 255, 255, 0.45);
+      background: rgba(255, 255, 255, 0.07);
+      border: 1px dashed rgba(255, 255, 255, 0.4);
       box-shadow: none;
     }
   </style>
 </head>
 <body>
   <h1>Poker — Dev Console</h1>
-
-  <p>
-    <button id="new-game-btn">New Game</button>
-    <button id="start-hand-btn" disabled>Start Hand</button>
-    <button id="refresh-btn" disabled>Refresh State</button>
-  </p>
-
-  <!-- Phase controls: each row is enabled only while its phase is active. -->
-  <p>
-    <label>Shuffle:
-      <select id="shuffle-hand">
-        <option value="">honest</option>
-      </select>
-    </label>
-    <button id="shuffle-btn" disabled>Shuffle</button>
-  </p>
-
-  <p>
-    <button id="accuse-btn" disabled>Accuse Dealer</button>
-    <button id="pass-btn" disabled>Pass</button>
-  </p>
-
-  <p>
-    <label>Action:
-      <select id="action-select">
-        <option>fold</option>
-        <option>check</option>
-        <option>call</option>
-        <option>raise</option>
-        <option>all-in</option>
-      </select>
-    </label>
-    <label>Raise by: <input id="action-amount" type="number" value="0" min="0"></label>
-    <button id="action-btn" disabled>Submit Action</button>
-  </p>
 
   <p>Game ID: <span id="game-id">(none yet)</span></p>
   <p id="error"></p>
@@ -154,8 +261,38 @@
     <div id="pot">Pot: —</div>
   </div>
 
+  <!-- Action bar: all controls, grouped by game phase. Every button is
+       wired to the same endpoint/handler it had before — this block is
+       layout and styling only. Each group enables during its phase. -->
+  <div id="action-bar">
+    <div class="control-group">
+      <button id="new-game-btn">New Game</button>
+      <button id="start-hand-btn" class="hidden">Start Hand</button>
+      <button id="refresh-btn" disabled>Refresh</button>
+    </div>
+    <div class="control-group">
+      <select id="shuffle-hand" title="Shuffle honestly, or pick a hand to rig">
+        <option value="">honest</option>
+      </select>
+      <button id="shuffle-btn" disabled>Shuffle</button>
+    </div>
+    <div class="control-group">
+      <button id="accuse-btn" disabled>Accuse</button>
+      <button id="pass-btn" disabled>Pass</button>
+    </div>
+    <div class="control-group hidden" id="bet-controls">
+      <button id="fold-btn" disabled>Fold</button>
+      <button id="check-btn" disabled>Check</button>
+      <button id="call-btn" disabled>Call</button>
+      <button id="raise-btn" disabled>Raise</button>
+      <input id="action-amount" type="number" value="0" min="0"
+             title="Raise by — chips above the call amount">
+      <button id="all-in-btn" disabled>All-in</button>
+    </div>
+  </div>
+
   <!-- Raw state, kept for debugging until the UI shows everything
-       (hole cards, chips, ...). Safe to delete later. -->
+       (bots' chips in play, ...). Safe to delete later. -->
   <details>
     <summary>Raw state (debug)</summary>
     <pre id="state">No state loaded.</pre>
@@ -180,9 +317,13 @@
     const shuffleBtn    = document.getElementById("shuffle-btn");
     const accuseBtn     = document.getElementById("accuse-btn");
     const passBtn       = document.getElementById("pass-btn");
-    const actionSelect  = document.getElementById("action-select");
     const actionAmount  = document.getElementById("action-amount");
-    const actionBtn     = document.getElementById("action-btn");
+    const betGroupEl    = document.getElementById("bet-controls");
+    // Betting buttons, paired with the action string each one sends.
+    const betBtns = [
+      ["fold-btn", "fold"], ["check-btn", "check"], ["call-btn", "call"],
+      ["raise-btn", "raise"], ["all-in-btn", "all-in"],
+    ].map(([id, action]) => [document.getElementById(id), action]);
     const gameIdEl   = document.getElementById("game-id");
     const errorEl    = document.getElementById("error");
     const stateEl    = document.getElementById("state");
@@ -337,16 +478,31 @@
       renderTable(state);
       renderSeats(state);
       updateControls();
+      updatePolling();
     }
 
     renderTable(null);   // draw the empty table on page load
 
+    // Gate every control from the fetched state: Start Hand appears only
+    // when the engine accepts /start-hand (WAITING, HAND_OVER); the
+    // betting group appears only when the human is the player to act.
     function updateControls() {
       const phase = lastState ? lastState.phase : null;
-      shuffleBtn.disabled = phase !== "SHUFFLE_PHASE";
-      accuseBtn.disabled  = phase !== "ACCUSATION_PHASE";
-      passBtn.disabled    = phase !== "ACCUSATION_PHASE";
-      actionBtn.disabled  = !(phase && phase.endsWith("_BETTING"));
+      const actor = lastState
+        ? lastState.players.find(p => p.id === activePlayerId(lastState))
+        : null;
+      const myTurn = !!actor && actor.is_human;
+
+      startHandBtn.classList.toggle("hidden",
+        !(phase === "WAITING" || phase === "HAND_OVER"));
+
+      shuffleBtn.disabled = !(phase === "SHUFFLE_PHASE" && myTurn);
+      accuseBtn.disabled  = !(phase === "ACCUSATION_PHASE" && myTurn);
+      passBtn.disabled    = accuseBtn.disabled;
+
+      const betting = !!phase && phase.endsWith("_BETTING") && myTurn;
+      betGroupEl.classList.toggle("hidden", !betting);
+      for (const [btn] of betBtns) btn.disabled = !betting;
     }
 
     // Fill the shuffle <select> with the cheat hands the backend offers.
@@ -377,7 +533,6 @@
         // POST /games returns the full initial state with game_id inside it.
         gameId = state.game_id;
         gameIdEl.textContent = gameId;
-        startHandBtn.disabled = false; // we have a game to act on now
         refreshBtn.disabled = false;
         await loadCheatHands();
         showState(state);
@@ -405,6 +560,42 @@
         errorEl.textContent = err.message;
       }
     });
+
+    // ── Auto-refresh polling ───────────────────────────────────────
+    // Bots advance server-side, so while a game is live we re-fetch the
+    // state every POLL_MS and re-render instead of relying on the
+    // Refresh button. showState calls updatePolling after every render,
+    // so the timer starts when a game appears and stops at GAME_OVER
+    // (or before any game exists). Each tick is the same request the
+    // Refresh button sends; an in-flight flag stops ticks from piling
+    // up if the server is slow.
+    const POLL_MS = 2000;
+    let pollTimer = null;
+    let pollInFlight = false;
+
+    async function pollState() {
+      if (pollInFlight || gameId === null) return;
+      pollInFlight = true;
+      try {
+        showState(await api(`/games/${gameId}`));
+      } catch (err) {
+        errorEl.textContent = err.message;
+      } finally {
+        pollInFlight = false;
+      }
+    }
+
+    function updatePolling() {
+      const live = gameId !== null
+        && lastState !== null
+        && lastState.phase !== "GAME_OVER";
+      if (live && pollTimer === null) {
+        pollTimer = setInterval(pollState, POLL_MS);
+      } else if (!live && pollTimer !== null) {
+        clearInterval(pollTimer);
+        pollTimer = null;
+      }
+    }
 
     // SHUFFLE_PHASE only occurs when the human is dealer, so the dealer id
     // can be read straight from the state. An empty select value means an
@@ -450,26 +641,30 @@
     accuseBtn.addEventListener("click", () => sendAccusation(true));
     passBtn.addEventListener("click", () => sendAccusation(false));
 
-    // Betting phases pause with the acting human at to_act[0]. The amount
-    // field only matters for "raise" (chips above the call amount); the
-    // backend ignores it for other actions.
-    actionBtn.addEventListener("click", async () => {
-      errorEl.textContent = "";
-      try {
-        const state = await api(`/games/${gameId}/action`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            player_id: lastState.to_act[0],
-            action: actionSelect.value,
-            amount: Number(actionAmount.value) || 0,
-          }),
-        });
-        showState(state);
-      } catch (err) {
-        errorEl.textContent = err.message;
-      }
-    });
+    // Betting phases pause with the acting human at to_act[0]. All five
+    // bet buttons send the same /action request as before — each just
+    // bakes in its action string. The amount field only matters for
+    // "raise" (chips above the call amount); the backend ignores it for
+    // other actions.
+    for (const [btn, action] of betBtns) {
+      btn.addEventListener("click", async () => {
+        errorEl.textContent = "";
+        try {
+          const state = await api(`/games/${gameId}/action`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              player_id: lastState.to_act[0],
+              action: action,
+              amount: Number(actionAmount.value) || 0,
+            }),
+          });
+          showState(state);
+        } catch (err) {
+          errorEl.textContent = err.message;
+        }
+      });
+    }
   </script>
 </body>
 </html>
