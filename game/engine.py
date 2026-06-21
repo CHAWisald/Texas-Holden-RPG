@@ -75,6 +75,117 @@ def _remove_from_deck(state: dict, cards: list):
 
 def _emit(state: dict, event_type: str, **data):
     state.setdefault("events", []).append({"type": event_type, **data})
+    _log_event(state, event_type, data)
+
+
+def _log_event(state: dict, etype: str, d: dict):
+    """Append a short human-readable line to state["log"] for player-facing events.
+
+    Each entry is {"text": str, "private_to": pid|None}. Public lines use
+    private_to=None; private lines (the dealer's own cheat choice, secret card
+    tampering) carry the owner's id so the UI can show them only to that player.
+    Pure control/setup events (dealt, street_start, accusation_prompt, …) produce
+    no line. The log is reset each hand (in start_hand), not on every call, so it
+    accumulates the whole hand's story unlike the ephemeral `events` list.
+    """
+    log = state.setdefault("log", [])
+    nm  = lambda pid: _pname(state, pid)
+
+    def pub(text):       log.append({"text": text, "private_to": None})
+    def priv(text, pid): log.append({"text": text, "private_to": pid})
+
+    # Betting actions.
+    if   etype == "fold":      pub(f"{nm(d['player_id'])} folds")
+    elif etype == "check":     pub(f"{nm(d['player_id'])} checks")
+    elif etype == "call":      pub(f"{nm(d['player_id'])} calls {d['amount']}")
+    elif etype == "raise":     pub(f"{nm(d['player_id'])} raises to {d['amount']}")
+    elif etype == "all_in":    pub(f"{nm(d['player_id'])} goes all-in for {d['amount']}")
+    elif etype == "dead_fold": pub(f"{nm(d['player_id'])} folds (out of chips)")
+
+    # Hand structure.
+    elif etype == "hand_start":
+        pub(f"— Hand #{d['hand_num']} — blinds: "
+            f"{nm(d['sb_id'])} {d['sb_bet']}, {nm(d['bb_id'])} {d['bb_bet']}")
+    elif etype == "flop":  pub("— Flop —")
+    elif etype == "turn":  pub("— Turn —")
+    elif etype == "river": pub("— River —")
+
+    # Gunner — a shot resolves.
+    elif etype == "shot_hit":
+        pub(f"{nm(d['shooter_id'])} shoots {nm(d['target_id'])} — BANG, hit! "
+            f"(paid {d['cost']})")
+    elif etype == "shot_miss":
+        pub(f"{nm(d['shooter_id'])} shoots {nm(d['target_id'])} — click, miss "
+            f"(paid {d['cost']})")
+    elif etype == "revolver_bang":
+        pub(f"{nm(d['player_id'])} pulls the trigger on themselves — BANG, eliminated")
+    elif etype == "revolver_click":
+        pub(f"{nm(d['player_id'])} pulls the trigger on themselves — "
+            f"click, +{d.get('chips_gained', 0)} chips")
+
+    # Cursed — a curse / immunity / fizzle.
+    elif etype == "cursed":
+        pub(f"{nm(d['by'])} curses {nm(d['target_id'])} ({d['hands']} hands)")
+    elif etype == "lucky_immune":
+        pub(f"{nm(d['target_id'])} is lucky — immune to the {d['effect']}")
+    elif etype == "ability_failed":
+        pub(f"{nm(d['player_id'])}'s ability fizzles ({d.get('reason', 'failed')})")
+
+    # Cursed — devil loan / debt outcomes.
+    elif etype == "devil_deal":
+        pub(f"{nm(d['player_id'])} busts and takes a devil loan "
+            f"(+{d['loan']}, owes {d['debt']} within {d['hands']} hands)")
+    elif etype == "devil_debt_repaid":
+        pub(f"{nm(d['player_id'])} repays the devil's debt")
+    elif etype == "devil_debt_eliminated":
+        pub(f"{nm(d['player_id'])} can't repay the devil — eliminated")
+    elif etype == "bluff_reward":
+        pub(f"{nm(d['player_id'])} bluffed a weak hand — {d['forgiven']} debt forgiven")
+
+    # Cheat mini-game — public outcomes only.
+    elif etype in ("human_accused", "bot_accused"):
+        pub(f"{nm(d['accuser_id'])} accuses the dealer of cheating! (cost {d['cost']})")
+    elif etype == "caught_cheating":
+        pub(f"Caught! {nm(d['dealer_id'])} rigged the deck — "
+            f"pays {d['penalty']}, hand re-dealt")
+    elif etype == "false_accusation":
+        pub(f"False alarm — {nm(d['dealer_id'])} shuffled honestly; the accuser pays up")
+    elif etype == "lucky_escape":
+        pub(f"{nm(d['dealer_id'])} slips the accusation — a lucky escape")
+
+    # Pot awarded.
+    elif etype == "hand_over":
+        ids = d.get("winner_ids", [])
+        who = " & ".join(nm(i) for i in ids) if ids else "nobody"
+        pub(f"{who} wins {d['pot']} — everyone else folded")
+    elif etype == "showdown":
+        winnings = (state.get("hand_result") or {}).get("winnings", {})
+        hands    = d.get("all_hands", {})
+        if winnings:
+            parts = [f"{nm(pid)} wins {amt} with {hands.get(pid, '?')}"
+                     for pid, amt in winnings.items()]
+            pub("Showdown — " + "; ".join(parts))
+        else:
+            pub(f"Showdown — pot {d.get('pot', 0)}")
+
+    elif etype == "game_over":
+        if d.get("winner_id"):
+            pub(f"Game over — {nm(d['winner_id'])} wins "
+                f"with {d.get('winner_chips', 0)} chips")
+
+    # Private — only the acting player should see these (secret information).
+    elif etype == "shuffle_done":
+        if d.get("cheated"):
+            priv(f"You rigged the deck for {d.get('chosen_hand')}", d["dealer_id"])
+        else:
+            priv("You shuffled honestly", d["dealer_id"])
+    elif etype == "devil_tamper":
+        priv("The devil tampered with your hole cards", d["player_id"])
+    elif etype == "curse_tamper":
+        priv("A curse warped your hole cards", d["player_id"])
+
+    # Everything else (dealt, preflop_start, street_start, accusation_prompt,
+    # shuffle_phase, passed_accusation, …) is control flow — no log line.
 
 
 # ── Player helpers ─────────────────────────────────────────────────────────────
@@ -113,6 +224,12 @@ def _get_player(state: dict, pid: str) -> Optional[dict]:
         if p["id"] == pid:
             return p
     return None
+
+
+def _pname(state: dict, pid: str) -> str:
+    """Display name for a player id (falls back to the id for the log)."""
+    p = _get_player(state, pid)
+    return p["name"] if p else pid
 
 
 def _active(state: dict) -> list:
@@ -433,38 +550,42 @@ def _handle_bust(state: dict, p: dict) -> bool:
 def _do_shoot(state: dict, shooter: dict, target_id: Optional[str]):
     bb = state["big_blind"]
 
-    # Every trigger pull — self-shot or opponent shot — pays the same
-    # escalating price (doubles per shot taken). The only free shot is
-    # the forced bust-revival roulette in _handle_bust.
+    # The trigger price doubles per shot taken (10 BB × 2^bullets_used).
+    # Shooting an opponent costs that price; shooting yourself is FREE but
+    # still advances the count, so each self-shot raises the price of the
+    # next shot. The other free pull is the bust-revival in _handle_bust.
     bullets_used = shooter.get("bullets_used", 0)
     cost         = bb * 10 * (2 ** bullets_used)
+
+    if target_id is None:
+        # Self-shoot gamble: free to pull, but still escalates the price.
+        # CLICK → gain 20BB; BANG → eliminated.
+        shooter["bullets_used"] = bullets_used + 1
+        if _fire_revolver(shooter):
+            shooter["died_by_revolver"] = True
+            shooter["chips"] = 0
+            _emit(state, "revolver_bang", player_id=shooter["id"], cost=0)
+        else:
+            revival = bb * 20
+            shooter["chips"] += revival
+            _emit(state, "revolver_click", player_id=shooter["id"],
+                  chips_gained=revival, cost=0)
+        return
+
+    # Shooting an opponent costs the escalating price.
     if shooter["chips"] < cost:
         _emit(state, "ability_failed", player_id=shooter["id"],
               reason="insufficient_chips", cost_needed=cost)
         return
 
-    if target_id is not None:
-        target = _get_player(state, target_id)
-        if target is None or target["chips"] <= 0:
-            _emit(state, "ability_failed", player_id=shooter["id"],
-                  reason="invalid_target", target_id=target_id)
-            return
+    target = _get_player(state, target_id)
+    if target is None or target["chips"] <= 0:
+        _emit(state, "ability_failed", player_id=shooter["id"],
+              reason="invalid_target", target_id=target_id)
+        return
 
     shooter["chips"]       -= cost
     shooter["bullets_used"] = bullets_used + 1
-
-    if target_id is None:
-        # Self-shoot gamble: CLICK → gain 20BB; BANG → eliminated.
-        if _fire_revolver(shooter):
-            shooter["died_by_revolver"] = True
-            shooter["chips"] = 0
-            _emit(state, "revolver_bang", player_id=shooter["id"], cost=cost)
-        else:
-            revival = bb * 20
-            shooter["chips"] += revival
-            _emit(state, "revolver_click", player_id=shooter["id"],
-                  chips_gained=revival, cost=cost)
-        return
 
     if _lucky_immune(target):
         _emit(state, "lucky_immune", target_id=target_id, effect="shot")
@@ -810,8 +931,13 @@ def _start_postflop(state: dict, phase: str) -> dict:
     _emit(state, "street_start", phase=phase,
           community_cards=state["community_cards"])
 
-    if not state["to_act"]:
-        return _end_street(state)   # all remaining are all-in
+    # No betting is possible once fewer than two players can still act —
+    # everyone else is all-in (or folded), so a lone live player has no one
+    # to bet against (and faces no bet, since current_bet was just reset).
+    # Run the rest of the board out straight to showdown instead of stalling
+    # on that player every street.
+    if len(state["to_act"]) <= 1:
+        return _end_street(state)
 
     return _advance_betting(state)
 
@@ -852,16 +978,23 @@ def _end_hand(state: dict) -> dict:
     return state
 
 
-def _distribute_side_pots(state: dict, scores: dict) -> dict:
+def _distribute_side_pots(state: dict, scores: dict) -> tuple:
     """
     Split the pot into side pots by each player's total contribution and award
-    each layer to the best eligible (non-folded) hand. Returns {pid: chips_won}.
+    each layer to the best eligible (non-folded) hand.
+
+    Returns `(won, returned)`, two {pid: chips} dicts. `won` is chips taken from
+    a *contested* layer (a real win); `returned` is chips handed back uncontested
+    — an uncalled over-bet that no opponent could match, or dead chips from a
+    layer everyone folded out of. Both must be credited to the player, but only
+    `won` makes someone a winner. (A player can appear in both: e.g. the chip
+    leader who wins the pot and also has an uncalled top slice returned.)
 
     `scores` maps each non-folded player's id to its HandEvaluator score tuple.
-    Folded players still forfeit their contribution to the layers they funded;
-    chips nobody could call (an uncalled over-bet) are refunded to the bettor.
+    Folded players still forfeit their contribution to the layers they funded.
     """
-    winnings = {p["id"]: 0 for p in state["players"]}
+    won      = {p["id"]: 0 for p in state["players"]}
+    returned = {p["id"]: 0 for p in state["players"]}
     contributors = [p for p in state["players"] if p.get("total_bet", 0) > 0]
 
     # Fallback for states with no per-player contribution recorded
@@ -869,14 +1002,14 @@ def _distribute_side_pots(state: dict, scores: dict) -> dict:
     if not contributors:
         eligible = [p for p in _still_in(state) if p["id"] in scores]
         if not eligible:
-            return winnings
+            return won, returned
         best    = max(scores[p["id"]] for p in eligible)
         winners = [p for p in eligible if scores[p["id"]] == best]
         share, rem = divmod(state["pot"], len(winners))
         for w in winners:
-            winnings[w["id"]] += share
-        winnings[winners[0]["id"]] += rem
-        return winnings
+            won[w["id"]] += share
+        won[winners[0]["id"]] += rem
+        return won, returned
 
     prev = 0
     for level in sorted({p["total_bet"] for p in contributors}):
@@ -886,24 +1019,30 @@ def _distribute_side_pots(state: dict, scores: dict) -> dict:
         if amount <= 0:
             continue
 
+        # A level only one player reached is an uncalled over-bet: nobody else
+        # put chips in to contest it, so it is returned, not won.
+        if len(layer_contributors) == 1:
+            returned[layer_contributors[0]["id"]] += amount
+            continue
+
         eligible = [p for p in layer_contributors
                     if not p["folded"] and p["id"] in scores]
         if not eligible:
-            # Uncalled chips at this level — refund to whoever put them in.
+            # Everyone who funded this level folded — return their dead chips.
             share, rem = divmod(amount, len(layer_contributors))
             for c in layer_contributors:
-                winnings[c["id"]] += share
-            winnings[layer_contributors[0]["id"]] += rem
+                returned[c["id"]] += share
+            returned[layer_contributors[0]["id"]] += rem
             continue
 
         best    = max(scores[p["id"]] for p in eligible)
         winners = [p for p in eligible if scores[p["id"]] == best]
         share, rem = divmod(amount, len(winners))
         for w in winners:
-            winnings[w["id"]] += share
-        winnings[winners[0]["id"]] += rem
+            won[w["id"]] += share
+        won[winners[0]["id"]] += rem
 
-    return winnings
+    return won, returned
 
 
 def _showdown(state: dict) -> dict:
@@ -917,20 +1056,23 @@ def _showdown(state: dict) -> dict:
         scores[p["id"]]    = score
         all_hands[p["id"]] = hand_name
 
-    winnings = _distribute_side_pots(state, scores)
+    won, returned = _distribute_side_pots(state, scores)
     for p in state["players"]:
-        if winnings.get(p["id"]):
-            p["chips"] += winnings[p["id"]]
+        credit = won.get(p["id"], 0) + returned.get(p["id"], 0)
+        if credit:
+            p["chips"] += credit
 
-    # Winners = players who took a contested (showdown) pot, not refunds.
-    winner_ids = [pid for pid in scores if winnings.get(pid, 0) > 0]
+    # Winners = players who took a *contested* pot. Getting your own uncalled
+    # chips returned is not winning, so refund-only players are excluded.
+    winner_ids = [pid for pid in scores if won.get(pid, 0) > 0]
 
     state["hand_result"] = {
         "type":       "showdown",
         "winner_ids": winner_ids,
         "pot":        state["pot"],
         "all_hands":  all_hands,
-        "winnings":   {pid: amt for pid, amt in winnings.items() if amt > 0},
+        "winnings":   {pid: amt for pid, amt in won.items() if amt > 0},
+        "refunds":    {pid: amt for pid, amt in returned.items() if amt > 0},
     }
     _emit(state, "showdown", winner_ids=winner_ids,
           pot=state["pot"], all_hands=all_hands)
@@ -985,7 +1127,8 @@ def create_game(players_config: list,
         "accusers":      [],
         # Result
         "hand_result":   None,
-        "events":        [],
+        "events":        [],        # ephemeral: cleared on every public call
+        "log":           [],        # human-readable; reset each hand, not per call
     }
 
 
@@ -1000,6 +1143,7 @@ def start_hand(state: dict) -> dict:
         raise IllegalMove(f"Cannot start hand in phase {state['phase']!r}")
 
     state["events"] = []
+    state["log"]    = []   # fresh per-hand story; persists across calls within the hand
 
     active = _active(state)
     if len(active) < 2:

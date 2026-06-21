@@ -425,6 +425,44 @@ class TestPhaseProgression:
         if len(remaining) == 1:
             assert state["phase"] in (PHASE_HAND_OVER, PHASE_GAME_OVER)
 
+    def test_all_in_then_fold_runs_board_to_showdown(self):
+        """3 players, one all-in: when one of the other two folds, the lone
+        remaining live player is NOT asked to check down every street — the
+        board runs straight to showdown. Regression for the stalled hand,
+        where the engine used to prompt that player on flop, turn and river."""
+        state = create_game([
+            {"id": "sh", "name": "Short", "is_human": True, "chips": 200},
+            {"id": "a",  "name": "A",     "is_human": True, "chips": 2000},
+            {"id": "b",  "name": "B",     "is_human": True, "chips": 2000},
+        ])
+        state = _advance_to_preflop(state)
+
+        betting = (PHASE_PREFLOP, PHASE_FLOP, PHASE_TURN, PHASE_RIVER)
+        postflop_prompts = 0
+        for _ in range(30):
+            if state["phase"] not in betting:
+                break
+            pid     = state["to_act"][0]
+            me      = _get_player(state, pid)
+            to_call = state["current_bet"] - me["street_bet"]
+            if state["phase"] != PHASE_PREFLOP:
+                postflop_prompts += 1          # someone was asked to act post-flop
+            if pid == "sh":
+                action = "all-in"
+            elif pid == "a":
+                action = "fold" if to_call > 0 else "check"
+            else:                              # b always matches the all-in
+                action = "call" if to_call > 0 else "check"
+            state = apply_action(state, pid, action)
+
+        # Hand resolved at showdown between the all-in player and the caller.
+        assert state["phase"] in (PHASE_HAND_OVER, PHASE_GAME_OVER)
+        assert state["hand_result"]["type"] == "showdown"
+        assert set(state["hand_result"]["all_hands"].keys()) == {"sh", "b"}
+        # The lone live player was never prompted after the fold — the engine
+        # ran the remaining streets straight to showdown.
+        assert postflop_prompts == 0
+
 
 # ── showdown / hand result ─────────────────────────────────────────────────────
 
@@ -589,6 +627,66 @@ class TestShowdown:
         assert _get_player(state, "p1")["chips"] == 200
         assert _get_player(state, "p2")["chips"] == 0
 
+    def test_uncalled_overbet_is_returned_not_won(self):
+        """An over-bet no opponent could match is *returned* to the bettor,
+        who is NOT flagged a winner; the best hand wins the contested pot.
+
+        Regression for the 'showdown awards everyone their own stack' bug:
+        the all-in over-bettor used to be listed as a winner of their own
+        returned chips (which, being all-in, equalled their leftover stack).
+        Board: 6D TD 2C 2D 9S."""
+        state = create_game([
+            {"id": "you",   "name": "You",   "is_human": False, "chips": 0},
+            {"id": "wyatt", "name": "Wyatt", "is_human": False, "chips": 0},
+        ])
+        state["community_cards"] = [_card(6,D), _card(10,D), _card(2,C),
+                                    _card(2,D), _card(9,S)]
+        state["deck"] = []
+        you, wyatt = _get_player(state, "you"), _get_player(state, "wyatt")
+        you["hole_cards"],   you["total_bet"],   you["folded"]   = \
+            [_card(13,H), _card(12,H)], 2533, False   # one pair of 2s
+        wyatt["hole_cards"], wyatt["total_bet"], wyatt["folded"] = \
+            [_card(8,D),  _card(8,H)],  1467, False    # two pair (8s & 2s)
+        state["pot"] = 2533 + 1467
+
+        _showdown(state)
+        result = state["hand_result"]
+
+        # Wyatt (two pair) is the SOLE winner of the contested 1467*2 pot.
+        assert result["winner_ids"] == ["wyatt"]
+        assert result["winnings"] == {"wyatt": 2934}
+        # You over-shoved 1066 nobody matched — returned, not won.
+        assert result["refunds"] == {"you": 1066}
+        assert "you" not in result["winner_ids"]
+        assert wyatt["chips"] == 2934 and you["chips"] == 1066
+        assert you["chips"] + wyatt["chips"] == state["pot"]
+
+    def test_winner_with_uncalled_remainder_splits_won_and_returned(self):
+        """The best hand that also over-bet wins the contested pot AND has its
+        uncalled top slice returned — the two are counted separately."""
+        state = create_game([
+            {"id": "big",   "name": "Big",   "is_human": False, "chips": 0},
+            {"id": "small", "name": "Small", "is_human": False, "chips": 0},
+        ])
+        state["community_cards"] = [_card(2,H), _card(7,D), _card(9,S),
+                                    _card(11,C), _card(4,H)]
+        state["deck"] = []
+        big, small = _get_player(state, "big"), _get_player(state, "small")
+        big["hole_cards"],   big["total_bet"],   big["folded"]   = \
+            [_card(14,S), _card(14,D)], 300, False    # AA, over-bet
+        small["hole_cards"], small["total_bet"], small["folded"] = \
+            [_card(13,S), _card(13,D)], 100, False    # KK, short stack
+        state["pot"] = 400
+
+        _showdown(state)
+        result = state["hand_result"]
+
+        # Contested 100*2=200 → Big (AA). Big's uncalled 200 over-bet returned.
+        assert result["winner_ids"] == ["big"]
+        assert result["winnings"] == {"big": 200}
+        assert result["refunds"] == {"big": 200}
+        assert big["chips"] == 400 and small["chips"] == 0
+
     def test_fold_win_awards_pot(self):
         state = _advance_to_preflop(_two_human_game())
         pid   = state["to_act"][0]
@@ -673,30 +771,30 @@ class TestRoleAbilities:
         with pytest.raises(ValueError, match="cannot use ability"):
             apply_ability(state, "cursed", "shoot")
 
-    def test_self_shoot_costs_chips_and_rewards_on_click(self):
-        """Self-shoot pays the same escalating cost as any shot; a click
-        still grants the 20BB reward on top."""
+    def test_self_shoot_is_free_and_rewards_on_click(self):
+        """Self-shoot costs no chips; a click still grants the 20BB reward."""
         state = self._gunner_game()
         chips_before = _get_player(state, "gunner")["chips"]
         with patch("game.engine._fire_revolver", return_value=False):
             state = apply_ability(state, "gunner", "shoot", target_id=None)
-        cost = state["big_blind"] * 10 * (2 ** 0)
         assert _get_player(state, "gunner")["chips"] == \
-            chips_before - cost + state["big_blind"] * 20
+            chips_before + state["big_blind"] * 20
 
-    def test_self_shoot_fails_when_insufficient_chips(self):
-        """A broke Gunner can't buy the self-shoot gamble; the free
-        desperation shot only happens on bust (_handle_bust)."""
+    def test_self_shoot_is_free_even_when_broke(self):
+        """A broke Gunner can still take the self-shoot gamble — it costs
+        nothing — but it still advances bullets_used."""
         state = self._gunner_game()
         _get_player(state, "gunner")["chips"] = 5
-        state = apply_ability(state, "gunner", "shoot", target_id=None)
-        assert any(e["type"] == "ability_failed" for e in state["events"])
+        with patch("game.engine._fire_revolver", return_value=False):
+            state = apply_ability(state, "gunner", "shoot", target_id=None)
+        assert not any(e["type"] == "ability_failed" for e in state["events"])
         g = _get_player(state, "gunner")
-        assert g["chips"] == 5 and not g["died_by_revolver"]
+        assert g["chips"] == 5 + state["big_blind"] * 20
+        assert g["bullets_used"] == 1
 
     def test_shot_cost_escalates_across_self_and_opponent_shots(self):
-        """bullets_used is one counter: every shot doubles the next one's
-        price, no matter who it was aimed at."""
+        """bullets_used is one counter: even the free self-shot doubles the
+        next opponent shot's price."""
         state = self._gunner_game()
         bb = state["big_blind"]
         _get_player(state, "gunner")["chips"] = bb * 1000
@@ -704,8 +802,8 @@ class TestRoleAbilities:
             state = apply_ability(state, "gunner", "shoot", target_id=None)
             after_self = _get_player(state, "gunner")["chips"]
             state = apply_ability(state, "gunner", "shoot", target_id="target")
-        assert after_self == bb * 1000 - bb * 10 + bb * 20   # paid 10BB, won 20BB
-        assert _get_player(state, "gunner")["chips"] == after_self - bb * 20
+        assert after_self == bb * 1000 + bb * 20             # free self-shot, won 20BB
+        assert _get_player(state, "gunner")["chips"] == after_self - bb * 20  # opp shot now 20BB
 
     def test_self_shoot_kills_on_bang(self):
         state = self._gunner_game()

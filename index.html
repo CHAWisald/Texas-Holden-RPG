@@ -55,6 +55,55 @@
     }
     details summary { color: var(--muted); cursor: pointer; }
 
+    /* ── Game log ────────────────────────────────────────────────── */
+    /* Human-readable history of the current hand (reset each hand by the
+       engine). Private lines — your own cheat/curse secrets — are gold and
+       lock-tagged; only the viewing human ever has them rendered. */
+    #log-panel {
+      background: var(--panel);
+      border: 1px solid #2a313a;
+      border-radius: 8px;
+      margin: 1.5rem 0;
+      overflow: hidden;
+    }
+    #log-header {
+      background: #232830;
+      color: var(--gold);
+      font-family: Georgia, "Times New Roman", serif;
+      letter-spacing: 0.08em;
+      padding: 0.5rem 0.9rem;
+      border-bottom: 1px solid #2a313a;
+    }
+    #log-list {
+      list-style: none;
+      margin: 0;
+      padding: 0.4rem 0;
+      max-height: 220px;
+      overflow-y: auto;
+      font-size: 0.88rem;
+    }
+    #log-list li {
+      padding: 0.18rem 0.9rem;
+      color: var(--ink);
+      border-left: 3px solid transparent;
+    }
+    #log-list li.log-empty { color: var(--muted); font-style: italic; }
+    /* Hand / street markers ("— Flop —") read as quiet centred dividers. */
+    #log-list li.log-sep {
+      color: var(--muted);
+      text-align: center;
+      letter-spacing: 0.06em;
+      margin: 0.15rem 0;
+    }
+    /* Private lines: gold accent + lock icon so you know they're yours only. */
+    #log-list li.log-private {
+      color: var(--gold);
+      background: rgba(233, 196, 106, 0.08);
+      border-left-color: var(--gold);
+      font-style: italic;
+    }
+    #log-list li.log-private::before { content: "🔒 "; }
+
     /* ── Poker table ─────────────────────────────────────────────── */
     #table {
       position: relative;   /* anchor for the absolutely-positioned seats */
@@ -179,6 +228,8 @@
     }
     .seat .hand-name { font-size: 0.7rem; color: #bfe8cd; font-style: italic; }
     .seat .seat-win  { font-size: 0.8rem; color: var(--gold); font-weight: bold; }
+    /* Uncalled chips handed back — not a win, so muted rather than gold. */
+    .seat .seat-refund { font-size: 0.75rem; color: #9fb3c8; font-style: italic; }
 
     /* What the player last did this street ("call 40", "raise to 80",
        "shoots Doc 🔫", ...). Cleared when the next street begins. */
@@ -457,6 +508,13 @@
              title="Bet/raise by — chips above the call amount">
       <button id="all-in-btn" disabled>All-in</button>
     </div>
+  </div>
+
+  <!-- Game log: human-readable history of the current hand. Filled by
+       renderLog() from state.log; private lines are shown only to you. -->
+  <div id="log-panel">
+    <div id="log-header">Game Log</div>
+    <ol id="log-list"><li class="log-empty">No events yet.</li></ol>
   </div>
 
   <!-- Raw state, kept for debugging until the UI shows everything
@@ -742,6 +800,17 @@
         div.appendChild(win);
       }
 
+      // Uncalled chips returned (an over-bet no one could match). This is
+      // not a win — show it separately and plainly. A player can both win a
+      // pot and have an uncalled top slice returned.
+      const refund = showdown && result.refunds ? result.refunds[player.id] : 0;
+      if (refund) {
+        const ref = document.createElement("div");
+        ref.className = "seat-refund";
+        ref.textContent = `returned +${refund}`;
+        div.appendChild(ref);
+      }
+
       // Chips committed this street, as a chip badge beside the seat.
       // Blinds post before SHUFFLE/ACCUSATION, so those phases count;
       // street_bet is stale once the hand is over, so they're excluded.
@@ -871,7 +940,8 @@
             act(ev.player_id, "🔫 BANG — dead");
             break;
           case "revolver_click":
-            // cost present on bought shots; the bust-revival one is free.
+            // cost present only on bought opponent shots; self-shots and
+            // the bust-revival pull are free.
             act(ev.player_id, ev.cost
               ? `🔫 click — paid ${ev.cost}, won ${ev.chips_gained}`
               : `🔫 click… +${ev.chips_gained}`);
@@ -890,6 +960,47 @@
       }
     }
 
+    // ── Game log ─────────────────────────────────────────────────
+    // Re-rendered from state.log — the server's human-readable history,
+    // reset each hand. Each entry is {text, private_to}: public lines have
+    // private_to=null; private ones carry a player id and are rendered only
+    // for the human viewing this page (gold + lock). Idempotent — only
+    // rebuilds when the log actually changes, so 2 s polls don't fight the
+    // user's scroll position.
+    const logList = document.getElementById("log-list");
+    let lastLogKey = "";
+
+    function renderLog(state) {
+      const log = state && state.log ? state.log : [];
+      const key = JSON.stringify(log);
+      if (key === lastLogKey) return;
+      lastLogKey = key;
+
+      const me   = state && state.players ? state.players.find(p => p.is_human) : null;
+      const myId = me ? me.id : null;
+
+      // Drop other players' private lines; keep public + my own secrets.
+      const visible = log.filter(e => e.private_to === null || e.private_to === myId);
+
+      logList.innerHTML = "";
+      if (visible.length === 0) {
+        const li = document.createElement("li");
+        li.className = "log-empty";
+        li.textContent = "No events yet.";
+        logList.appendChild(li);
+        return;
+      }
+
+      for (const e of visible) {
+        const li = document.createElement("li");
+        if (e.private_to !== null)        li.className = "log-private";
+        else if (e.text.startsWith("—"))  li.className = "log-sep";
+        li.textContent = e.text;
+        logList.appendChild(li);
+      }
+      logList.scrollTop = logList.scrollHeight;   // keep the newest line in view
+    }
+
     // Render a state object (visual table + raw debug JSON) and re-gate
     // the phase controls to match it.
     function showState(state) {
@@ -898,6 +1009,7 @@
       processEvents(state);
       renderTable(state);
       renderSeats(state);
+      renderLog(state);
       updateControls();
       updatePolling();
     }
@@ -937,8 +1049,9 @@
       abilityGroupEl.classList.toggle("hidden", !canUse);
       if (!canUse) abilityArmed = false;
       if (canUse) {
-        // Show the escalating price on the trigger itself: every shot
-        // taken doubles the next one (10 BB × 2^shots), self or not.
+        // Price to shoot an opponent: doubles per shot taken
+        // (10 BB × 2^shots). Self-shots are free but still bump the
+        // count, so they raise this price too.
         const shotCost = 10 * lastState.big_blind
           * 2 ** (human.bullets_used || 0);
         const label = ability === "shoot" ? `Shoot 🔫 ${shotCost}` : "Curse 😈";
