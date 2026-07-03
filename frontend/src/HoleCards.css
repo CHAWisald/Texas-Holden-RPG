@@ -1,0 +1,8 @@
+/* A row of hole cards. Sizing of the cards themselves is handled by the
+   context they sit in (e.g. .seat .card shrinks them inside a seat). */
+.hole-cards {
+  display: flex;
+  gap: 0.3rem;
+  justify-content: center;
+  margin-bottom: 0.3rem;
+}

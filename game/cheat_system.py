@@ -8,7 +8,7 @@ from .card import Suit
 
 # Per-hand shuffle time: (label, lo, hi, mean).
 # Stronger hands require a longer, riskier shuffle.
-# Honest range is 12.5–17.5 s (mean 15 s); overlap with honest shrinks as hands get stronger.
+# Honest range is 12–18 s (right-skewed, most mass 12–15 s); overlap with honest shrinks as hands get stronger.
 CheatHand = namedtuple('CheatHand', ['label', 'lo', 'hi', 'mean'])
 
 CHEAT_HANDS = {

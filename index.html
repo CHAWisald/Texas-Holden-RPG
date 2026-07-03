@@ -525,8 +525,10 @@
   </details>
 
   <script>
-    // Base URL of the FastAPI backend. Change here if the port changes.
-    const API = "http://localhost:8000";
+    // Base URL of the FastAPI backend. Empty = same origin as the page
+    // (the server serves this file at "/"). Set to "http://localhost:8000"
+    // only if you open index.html straight from disk instead.
+    const API = "";
 
     // Client-side state: the current game's id, plus the last state the
     // server returned — the phase controls read it to know whose turn it

@@ -1,0 +1,17 @@
+# Render blueprint — deploy from the dashboard with "New > Blueprint",
+# pointing at this repo. One free web service running the API + web UI.
+#
+# Keep this a single instance/worker: game state lives in an in-memory dict,
+# so multiple processes would each hold their own separate set of games.
+services:
+  - type: web
+    name: texas-holdem-rpg
+    runtime: python
+    plan: free
+    buildCommand: pip install -r requirements.txt && npm --prefix frontend ci && npm --prefix frontend run build
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.11
+      - key: NODE_VERSION
+        value: 22.16.0

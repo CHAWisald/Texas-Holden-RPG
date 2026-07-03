@@ -1,0 +1,46 @@
+/* Game log panel — reused from the old index.html (#log-* → .log-*,
+   CSS variables substituted with their literal palette values). */
+.log-panel {
+  background: #1c2026;
+  border: 1px solid #2a313a;
+  border-radius: 8px;
+  margin: 1.5rem 0;
+  overflow: hidden;
+}
+.log-header {
+  background: #232830;
+  color: #e9c46a;
+  font-family: Georgia, "Times New Roman", serif;
+  letter-spacing: 0.08em;
+  padding: 0.5rem 0.9rem;
+  border-bottom: 1px solid #2a313a;
+}
+.log-list {
+  list-style: none;
+  margin: 0;
+  padding: 0.4rem 0;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 0.88rem;
+}
+.log-list li {
+  padding: 0.18rem 0.9rem;
+  color: #e8e6df;
+  border-left: 3px solid transparent;
+}
+.log-list li.log-empty { color: #9aa3ad; font-style: italic; }
+/* Hand / street markers ("— Flop —") read as quiet centred dividers. */
+.log-list li.log-sep {
+  color: #9aa3ad;
+  text-align: center;
+  letter-spacing: 0.06em;
+  margin: 0.15rem 0;
+}
+/* Private lines: gold accent + lock icon so you know they're yours only. */
+.log-list li.log-private {
+  color: #e9c46a;
+  background: rgba(233, 196, 106, 0.08);
+  border-left-color: #e9c46a;
+  font-style: italic;
+}
+.log-list li.log-private::before { content: "🔒 "; }

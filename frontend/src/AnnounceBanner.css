@@ -1,0 +1,45 @@
+/* Accusation/verdict banner, centred over the felt. Ported from the old
+   index.html #announce (id → class). Its parent (the table) is position:relative. */
+.announce {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 5;
+  max-width: 80%;
+  padding: 0.8rem 1.6rem;
+  border-radius: 12px;
+  background: rgba(0, 0, 0, 0.85);
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.6);
+  font-size: 1.05rem;
+  font-weight: bold;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+  animation: announce-pop 0.35s ease-out;
+}
+.announce.suspense {
+  color: #ffd877;
+  border-color: rgba(233, 196, 106, 0.65);
+  animation: announce-pop 0.35s ease-out,
+             announce-pulse 0.9s ease-in-out infinite;
+}
+.announce.caught {
+  color: #ff6b62;
+  border-color: rgba(255, 107, 98, 0.75);
+  animation: announce-pop 0.35s ease-out,
+             announce-flash 0.45s ease-out 2;
+}
+.announce.honest { color: #7ef0a0; border-color: rgba(126, 240, 160, 0.65); }
+.announce.escape { color: #9ecbff; border-color: rgba(158, 203, 255, 0.65); }
+
+@keyframes announce-pop {
+  from { transform: translate(-50%, -50%) scale(0.6); opacity: 0; }
+  to   { transform: translate(-50%, -50%) scale(1);   opacity: 1; }
+}
+@keyframes announce-pulse {
+  50% { box-shadow: 0 0 28px rgba(233, 196, 106, 0.55); }
+}
+@keyframes announce-flash {
+  50% { box-shadow: 0 0 32px rgba(255, 107, 98, 0.7); background: rgba(60, 8, 8, 0.9); }
+}

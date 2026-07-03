@@ -1,0 +1,28 @@
+/* Card styling reused verbatim from the old index.html (.card and friends).
+   A card is a small white rounded box: rank top-left, suit bottom-right. */
+.card {
+  display: inline-flex;
+  flex-direction: column;
+  justify-content: space-between;
+  width: 3rem;
+  height: 4.2rem;
+  background: linear-gradient(160deg, #ffffff 0%, #f2efe6 100%);
+  color: #1f232b;
+  border: 1px solid #b9b4a6;
+  border-radius: 7px;
+  padding: 0.25rem 0.35rem;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45),
+              inset 0 1px 0 rgba(255, 255, 255, 0.8);
+  font-weight: bold;
+  font-family: Georgia, "Times New Roman", serif;
+}
+.card .rank { font-size: 1.05rem; line-height: 1; align-self: flex-start; }
+.card .suit { font-size: 1.5rem;  line-height: 1; align-self: flex-end; }
+.card.red { color: #c0202a; }
+
+/* Empty community slot: a dashed outline where a card will appear. */
+.card.slot {
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px dashed rgba(255, 255, 255, 0.4);
+  box-shadow: none;
+}

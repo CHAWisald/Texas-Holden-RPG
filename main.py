@@ -7,10 +7,13 @@ Docs at:   http://127.0.0.1:8000/docs
 
 import threading
 import uuid
+from pathlib import Path
 from typing import Optional
 
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from game.engine import (
@@ -32,12 +35,28 @@ app = FastAPI(
         "/shuffle → /accuse → /action. Bots auto-advance server-side."
     ),
 )
+# The web UI is served same-origin at "/" and needs no CORS. This exists only
+# so the React dev server (poker-frontend, Vite on :5173) can call the API.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],        # dev only — fine on localhost
-    allow_methods=["*"],        # allow POST, GET, etc.
-    allow_headers=["*"],        # allow Content-Type: application/json
+    allow_origins=["http://localhost:5173", "http://127.0.0.1:5173"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
+
+# ── Web UI ─────────────────────────────────────────────────────────────────────
+# The React app (frontend/) is the site: its production build is mounted at "/"
+# at the BOTTOM of this file, after every API route, so the mount only catches
+# paths no endpoint claimed. The old single-file vanilla UI stays reachable at
+# /classic.
+
+_CLASSIC_HTML = Path(__file__).parent / "index.html"
+_FRONTEND_DIST = Path(__file__).parent / "frontend" / "dist"
+
+
+@app.get("/classic", include_in_schema=False)
+def classic_ui():
+    return FileResponse(_CLASSIC_HTML)
 # ── In-memory store ────────────────────────────────────────────────────────────
 # Maps game_id (str) → game state (dict).
 games: dict[str, dict] = {}
@@ -251,4 +270,13 @@ def do_ability(game_id: str, req: AbilityRequest):
         except IllegalMove as exc:
             raise HTTPException(status_code=400, detail=str(exc))
         return games[game_id]
+
+
+# ── React app mount ────────────────────────────────────────────────────────────
+# Must stay the LAST route: a mount at "/" swallows every path not matched by
+# an endpoint above. Guarded so the API still runs before `npm run build`
+# (dev flow: Vite serves the app on :5173 instead).
+
+if _FRONTEND_DIST.is_dir():
+    app.mount("/", StaticFiles(directory=_FRONTEND_DIST, html=True), name="frontend")
 

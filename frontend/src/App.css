@@ -1,0 +1,75 @@
+/* Page chrome around the felt: toolbar, status line, error, debug panel. */
+
+.toolbar {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 0.75rem;
+}
+
+/* Phase + whose turn ("PREFLOP BETTING — your turn"). */
+.status {
+  text-align: center;
+  font-weight: bold;
+  letter-spacing: 0.06em;
+  color: #9ecbff;
+  margin: 0.35rem 0;
+  min-height: 1.4em;
+}
+
+/* The accuse tell: how long the dealer "shuffled". */
+.shuffle-time {
+  text-align: center;
+  color: var(--gold);
+  font-weight: bold;
+  margin: 0.25rem 0;
+}
+
+.error {
+  color: #ff7a70;
+  white-space: pre-wrap;
+  text-align: center;
+  margin: 0.5rem 0;
+}
+
+/* Pre-game welcome card, shown where the table will appear. */
+.welcome {
+  max-width: 460px;
+  margin: 2.5rem auto;
+  padding: 1.5rem 2rem;
+  text-align: center;
+  color: var(--muted);
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+}
+.welcome strong { color: var(--gold); }
+
+/* Collapsible raw-state dump, kept for debugging (same idea as /classic). */
+.debug { margin: 1.5rem 0 0; }
+.debug summary {
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 0.85rem;
+}
+.debug .game-id {
+  color: var(--muted);
+  font-size: 0.8rem;
+  margin: 0.5rem 0 0;
+}
+.debug .game-id code {
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  color: var(--gold);
+}
+.debug pre {
+  background: #11141a;
+  color: #c6cdd5;
+  border: 1px solid var(--panel-border);
+  padding: 1rem;
+  overflow-x: auto;
+  border-radius: 8px;
+  font-size: 0.8rem;
+  text-align: left;
+}

@@ -1,0 +1,117 @@
+/* Seat styling reused from the old index.html. Each .seat is absolutely
+   placed on the table's ellipse by PlayerSeat (it sets left/top inline). */
+.seat {
+  position: absolute;
+  transform: translate(-50%, -50%);   /* centre the box on its point */
+  min-width: 4.3rem;
+  padding: 0.22rem 0.45rem;
+  background: linear-gradient(180deg, rgba(24, 27, 32, 0.92), rgba(10, 12, 15, 0.9));
+  border: 1.5px solid rgba(255, 255, 255, 0.2);
+  border-radius: 10px;
+  font-size: 0.72rem;
+  line-height: 1.25;
+  text-align: center;
+  color: #e8e6df;
+  box-shadow: 0 4px 10px rgba(0, 0, 0, 0.5);
+}
+.seat .seat-name { font-weight: bold; letter-spacing: 0.02em; }
+.seat .seat-chips { color: #ffd877; font-size: 0.66rem; opacity: 0.95; }
+
+/* The human's seat: gold border + "(you)" tag. */
+.seat.me {
+  border-color: #e9c46a;
+  background: linear-gradient(180deg, rgba(30, 27, 16, 0.96), rgba(14, 12, 8, 0.94));
+  box-shadow: 0 5px 12px rgba(0, 0, 0, 0.5), 0 0 10px rgba(233, 196, 106, 0.25);
+}
+.seat.me .seat-name::after { content: " (you)"; font-weight: normal; opacity: 0.8; }
+
+/* Whose turn it is: green glow. Declared after .me so it wins on your turn. */
+.seat.active {
+  border-color: #7ef0a0;
+  box-shadow: 0 0 16px 4px rgba(126, 240, 160, 0.65);
+}
+
+/* Folded this hand: dimmed until the next deal. */
+.seat.folded { opacity: 0.5; filter: grayscale(0.4); }
+
+/* Hand-over decorations. Declared after .active/.folded so the gold wins. */
+.seat.winner {
+  opacity: 1;
+  filter: none;
+  border-color: #e9c46a;
+  box-shadow: 0 0 16px 4px rgba(233, 196, 106, 0.55);
+}
+.seat .hand-name { font-size: 0.7rem; color: #bfe8cd; font-style: italic; }
+.seat .seat-win  { font-size: 0.8rem; color: #e9c46a; font-weight: bold; }
+.seat .seat-refund { font-size: 0.75rem; color: #9fb3c8; font-style: italic; }
+
+/* Chips bet this street: a round chip pinned to the seat's right edge. */
+.seat .bet-chip {
+  position: absolute;
+  left: 100%;
+  top: 50%;
+  transform: translate(0.45rem, -50%);
+  min-width: 2.1rem;
+  height: 2.1rem;
+  padding: 0 0.3rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  background: radial-gradient(circle, #c23434 58%, #8c1f1f 60%);
+  border: 3px dashed rgba(255, 255, 255, 0.85);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.5), inset 0 0 0 2px rgba(0, 0, 0, 0.25);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: bold;
+}
+
+/* Cards inside a seat (hole cards) are smaller than the board cards. */
+.seat .card { width: 1.65rem; height: 2.4rem; padding: 0.12rem 0.2rem; border-radius: 5px; }
+.seat .card .rank { font-size: 0.68rem; }
+.seat .card .suit { font-size: 0.95rem; }
+.seat .hole-cards { gap: 0.2rem; margin-bottom: 0.2rem; }
+
+/* The player's last action this street ("call 40", "raise to 80", ...). */
+.seat .seat-action { font-size: 0.72rem; color: #8fd4ff; font-style: italic; }
+
+/* Each player's role, colour-coded under their name. */
+.seat .seat-role { font-size: 0.66rem; font-weight: bold; letter-spacing: 0.08em; }
+.seat .seat-role.cursed { color: #c39bd3; }
+.seat .seat-role.gunner { color: #f0a868; }
+.seat .seat-role.lucky  { color: #7ef0a0; }
+
+/* Table position tag (BTN/SB/BB/UTG/...), pinned to the seat's top-left. */
+.seat .pos-tag {
+  position: absolute;
+  left: -0.55rem;
+  top: -0.55rem;
+  padding: 0.12rem 0.4rem;
+  border-radius: 999px;
+  background: #1b2a3a;
+  border: 1px solid rgba(158, 203, 255, 0.55);
+  color: #9ecbff;
+  font-size: 0.62rem;
+  font-weight: bold;
+  letter-spacing: 0.04em;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}
+
+/* Dealer button: a small white disc pinned to the seat's top-right corner. */
+.seat .dealer-btn {
+  position: absolute;
+  right: -0.55rem;
+  top: -0.55rem;
+  width: 1.5rem;
+  height: 1.5rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #ffffff, #d6d2c8);
+  border: 1px solid #948f82;
+  color: #222;
+  font-size: 0.8rem;
+  font-weight: bold;
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5);
+}

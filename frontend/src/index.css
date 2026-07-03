@@ -1,0 +1,85 @@
+/* Casino dark theme — same palette as the classic UI (index.html at /classic),
+   so both frontends read as the same game. */
+:root {
+  --bg: #15181d;
+  --felt: #257049;
+  --felt-edge: #123c28;
+  --rail: #53351d;
+  --gold: #e9c46a;
+  --ink: #e8e6df;
+  --muted: #9aa3ad;
+  --panel: #1c2026;
+  --panel-border: #2a313a;
+
+  font: 16px/1.45 "Segoe UI", system-ui, -apple-system, sans-serif;
+  color-scheme: dark;
+  color: var(--ink);
+  background-color: var(--bg);
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+  min-height: 100vh;
+  background: radial-gradient(1100px 520px at 50% -8%, #242b34, var(--bg) 70%);
+}
+
+#root {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 1.25rem 1rem 3rem;
+  box-sizing: border-box;
+}
+
+h1 {
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 1.7rem;
+  font-weight: normal;
+  letter-spacing: 0.12em;
+  text-align: center;
+  color: var(--gold);
+  text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6);
+  margin: 0.5rem 0 1rem;
+}
+
+/* Pill buttons, matching the classic action bar. */
+button {
+  font-size: 0.9rem;
+  font-weight: bold;
+  letter-spacing: 0.02em;
+  color: #fff;
+  background: #4a525e;
+  border: none;
+  border-radius: 999px;
+  padding: 0.45rem 1.05rem;
+  cursor: pointer;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.22),
+              0 2px 5px rgba(0, 0, 0, 0.4);
+}
+button:hover:enabled  { filter: brightness(1.15); }
+button:active:enabled { transform: translateY(1px); }
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+  box-shadow: none;
+  text-shadow: none;
+}
+
+/* Gold accent for the "move the game forward" buttons (New Game, Start Hand). */
+button.primary {
+  background: linear-gradient(180deg, #f0d488, #cfa53e);
+  color: #3a2c0d;
+  text-shadow: none;
+}
+
+select,
+input {
+  font-size: 0.9rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid #424a55;
+  border-radius: 8px;
+  background: #2c313a;
+  color: #fff;
+}
